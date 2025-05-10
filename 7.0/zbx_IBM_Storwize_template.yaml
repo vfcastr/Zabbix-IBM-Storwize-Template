@@ -14,8 +14,6 @@ zabbix_export:
         
         O user pode ser um read-only com as permissões:
         Monitor
-        
-        Author: vfac@kyndryl.com
       vendor:
         name: viniciuscastro95@gmail.com
         version: 7.0-1
