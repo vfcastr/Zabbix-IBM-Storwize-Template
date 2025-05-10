@@ -1,0 +1,3176 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+    - uuid: 7c2cb727f85b492d88cd56e17127c64d
+      name: Templates/SAN
+  templates:
+    - uuid: 0d0e31b3fec3497ab3a1a8a92341b43c
+      template: 'IBM Storwize by SSH'
+      name: 'IBM Storwize by SSH'
+      description: |
+        Template para monitorar o IBM Storwize (v3700, v5000, v7000, SAN Volume Controller)..
+
+        O template foi testado na versão Storewise v7000.
+
+        O user pode ser um read-only com as permissões:
+        Monitor
+      vendor:
+        name: viniciuscastro95@gmail.com
+        version: 7.0-1
+      groups:
+        - name: Templates/SAN
+      items:
+        - uuid: 31d82a8414e4477aaeaea03f9ccb5ce0
+          name: 'Storwize: Get eventlog'
+          type: SSH
+          key: 'ssh.run[get.storwize.eventlog]'
+          delay: 10m
+          value_type: TEXT
+          trends: '0'
+          params: |
+            #!/bin/bash
+
+            # Tempo atual (epoch)
+            now=$(date +%s)
+
+            # Epoch de 10 minutos atrás
+            past=$((now - 600))
+
+            # Converter para o formato YYMMDDHHMMSS exigido pelo lseventlog
+            since=$(date -d "@$past" +%y%m%d%H%M%S)
+            until=$(date -d "@$now" +%y%m%d%H%M%S)
+
+            # Executar lseventlog com filtros de tempo
+            lseventlog -delim : -filtervalue "last_timestamp>=$since:last_timestamp<=$until"
+          username: '{$IBM.SW.SSH.USER}'
+          password: '{$IBM.SW.SSH.PASSWORD}'
+          preprocessing:
+            - type: CSV_TO_JSON
+              parameters:
+                - ':'
+                - ''
+                - '1'
+              error_handler: CUSTOM_VALUE
+              error_handler_params: 'Falha em converter o csv para json'
+            - type: STR_REPLACE
+              parameters:
+                - '[]'
+                - '[{"sequence_number":"0","last_timestamp":"0","object_type":"0","object_id":"0","object_name":"0","copy_id":"","status":"0","fixed":"no","event_id":"0","error_code":"","description":"Sem eventos"}]'
+          tags:
+            - tag: component
+              value: log
+        - uuid: fdebf135d6784cb89dc035327ffef994
+          name: 'Storwize: Get storwize stats'
+          type: SSH
+          key: 'ssh.run[get.storwize.stats]'
+          delay: 2m
+          value_type: TEXT
+          trends: '0'
+          params: |
+            #!/bin/bash
+
+            commands=(
+              "lsvdisk"
+              "lsarray"
+              "lsenclosurebattery"
+              "lsenclosurecanister"
+              "lsenclosurepsu"
+              "lshost"
+              "lsmdisk"
+              "lsdrive"
+              "lsenclosure"
+              "lsnodecanister"
+              "lsportfc"
+              "lsquorum"
+              "lsportsas"
+              "lssystem"
+              "lssystemstats"
+            )
+
+            for cmd in "${commands[@]}"; do
+              echo "##BEGIN:$cmd"
+              output=$($cmd -gui -delim : 2>&1)
+              echo "$output"
+              echo "##END:$cmd"
+              echo ""
+            done
+          username: '{$IBM.SW.SSH.USER}'
+          password: '{$IBM.SW.SSH.PASSWORD}'
+          description: 'Item to get all data from storage.'
+          tags:
+            - tag: component
+              value: raw
+          triggers:
+            - uuid: 491ea82bdfb54bf18446eb636bb1fcf6
+              expression: 'nodata(/IBM Storwize by SSH/ssh.run[get.storwize.stats],20m)=1'
+              name: 'Storwize: Data collecting is falling'
+              priority: INFO
+              manual_close: 'YES'
+        - uuid: 76bfa10bce0347feae337011f42a73e8
+          name: 'Storwize: Get storwize vdisk'
+          type: SSH
+          key: 'ssh.run[get.storwize.vdisk]'
+          delay: 10m
+          value_type: TEXT
+          trends: '0'
+          params: |
+            echo "##BEGIN:lsvdisk"
+            for vname in $(lsvdisk -nohdr -delim : | cut -d: -f2); do
+              echo "#VDISK:$vname"
+              lsvdisk -delim : "$vname"
+            done
+            echo "##END:lsvdisk"
+          username: '{$IBM.SW.SSH.USER}'
+          password: '{$IBM.SW.SSH.PASSWORD}'
+          description: 'Item the get extra data from vdisk command.'
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // Espera que o valor recebido contenha o bloco ##BEGIN:lsvdisk até ##END:lsvdisk
+                  var lines = value.split("\n");
+                  var results = [];
+                  var current = {};
+                  var inSection = false;
+
+                  for (var i = 0; i < lines.length; i++) {
+                      var line = lines[i].trim();
+
+                      if (line === "##BEGIN:lsvdisk") {
+                          inSection = true;
+                          continue;
+                      }
+                      if (line === "##END:lsvdisk") {
+                          if (Object.keys(current).length > 0) {
+                              results.push(current);
+                          }
+                          break;
+                      }
+
+                      if (!inSection) continue;
+
+                      if (line.startsWith("#VDISK:")) {
+                          if (Object.keys(current).length > 0) {
+                              results.push(current);
+                          }
+                          current = { vdisk: line.substring(8).trim() };
+                          continue;
+                      }
+
+                      var parts = line.split(":");
+                      if (parts.length >= 2) {
+                          var key = parts[0].trim();
+                          var value = parts.slice(1).join(":").trim();
+                          current[key] = value;
+                      }
+                  }
+
+                  // Constrói CSV
+                  var allKeys = {};
+                  for (var i = 0; i < results.length; i++) {
+                      for (var key in results[i]) {
+                          allKeys[key] = true;
+                      }
+                  }
+                  var headers = Object.keys(allKeys);
+                  var output = [headers.join(":")];
+
+                  for (var i = 0; i < results.length; i++) {
+                      var row = [];
+                      for (var j = 0; j < headers.length; j++) {
+                          var key = headers[j];
+                          row.push(results[i][key] || "");
+                      }
+                      output.push(row.join(":"));
+                  }
+
+                  return output.join("\n");
+            - type: CSV_TO_JSON
+              parameters:
+                - ':'
+                - ''
+                - '1'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: 05968600eb66475d9deda104d8b499b7
+          name: 'Storwize: Get array'
+          type: DEPENDENT
+          key: storwize.get.array.raw
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          description: |
+            This command returns a concise list or a detailed view of array MDisks
+            visible to the system.
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // Define o nome da seção que queremos extrair
+                  var section = "lsarray";
+
+                  // Regex para capturar tudo entre os delimitadores
+                  var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
+
+                  // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
+                  var match = value.match(regex);
+
+                  // Valida se encontrou a seção esperada e se ela tem conteúdo
+                  if (!match || match.length < 2 || !match[1].trim()) {
+                      throw "Seção 'lsenclosure' não encontrada ou vazia";
+                  }
+
+                  // Retorna apenas o conteúdo da seção
+                  return match[1].trim();
+            - type: CSV_TO_JSON
+              parameters:
+                - ':'
+                - ''
+                - '1'
+          master_item:
+            key: 'ssh.run[get.storwize.stats]'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: 2e6736679b264dfbba4afd282715ef86
+          name: 'Storwize: Get drive'
+          type: DEPENDENT
+          key: storwize.get.drive.raw
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          description: |
+            Use this command to display configuration information and drive VPD.
+
+            Note: Filtering should be permitted on all concise fields.
+
+            Note: A backup of system state is stored on quorum disks, which
+            contributes to the physically used space. The amount of data that is
+            used for this backup depends on the system configuration, but is
+            typically a few MB and cannot exceed 1 GB.
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // Define o nome da seção que queremos extrair
+                  var section = "lsdrive";
+
+                  // Regex para capturar tudo entre os delimitadores
+                  var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
+
+                  // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
+                  var match = value.match(regex);
+
+                  // Valida se encontrou a seção esperada e se ela tem conteúdo
+                  if (!match || match.length < 2 || !match[1].trim()) {
+                      throw "Seção 'lsenclosure' não encontrada ou vazia";
+                  }
+
+                  // Retorna apenas o conteúdo da seção
+                  return match[1].trim();
+            - type: CSV_TO_JSON
+              parameters:
+                - ':'
+                - ''
+                - '1'
+          master_item:
+            key: 'ssh.run[get.storwize.stats]'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: 12fcbff7c2a447a8a6f560d2490fc01a
+          name: 'Storwize: Get enclosure'
+          type: DEPENDENT
+          key: storwize.get.enclosure.raw
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          description: |
+            This command displays a summary of the enclosures (including status
+            information for canisters and power and cooling units, and other
+            enclosure attributes).
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // Define o nome da seção que queremos extrair
+                  var section = "lsenclosure";
+
+                  // Regex para capturar tudo entre os delimitadores
+                  var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
+
+                  // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
+                  var match = value.match(regex);
+
+                  // Valida se encontrou a seção esperada e se ela tem conteúdo
+                  if (!match || match.length < 2 || !match[1].trim()) {
+                      throw "Seção 'lsenclosure' não encontrada ou vazia";
+                  }
+
+                  // Retorna apenas o conteúdo da seção
+                  return match[1].trim();
+            - type: CSV_TO_JSON
+              parameters:
+                - ':'
+                - ''
+                - '1'
+          master_item:
+            key: 'ssh.run[get.storwize.stats]'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: 5ac7e6543da0428fa0994d358ee14a5d
+          name: 'Storwize: Get enclosurebattery'
+          type: DEPENDENT
+          key: storwize.get.enclosurebattery.raw
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          description: |
+            This command displays information about the batteries, which are located
+            in the node canisters. The concise view displays a line for each battery
+            slot in every enclosure whether a battery exists for that slot or not.
+            Batteries are not shown for expansion enclosures.
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // Define o nome da seção que queremos extrair
+                  var section = "lsenclosurebattery";
+                  var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
+
+                  var match = value.match(regex);
+
+                  if (!match || match.length < 2 || !match[1].trim()) {
+                      throw "Seção '" + section + "' não encontrada ou vazia";
+                  }
+
+                  var raw = match[1].trim().replace(/\r/g, '');
+                  var lines = raw.split("\n");
+
+                  if (lines.length < 2) {
+                      throw "Seção '" + section + "' está vazia ou incompleta";
+                  }
+
+                  var header = lines[0].split(":");
+                  var colCount = header.length;
+                  var cleaned = [lines[0]];
+
+                  for (var i = 1; i < lines.length; i++) {
+                      var fields = lines[i].split(":");
+                      if (fields.length > colCount) {
+                          fields = fields.slice(0, colCount);
+                      }
+                      while (fields.length < colCount) {
+                          fields.push(""); // completa se faltar
+                      }
+                      cleaned.push(fields.join(":"));
+                  }
+
+                  return cleaned.join("\n");
+            - type: CSV_TO_JSON
+              parameters:
+                - ':'
+                - ''
+                - '1'
+          master_item:
+            key: 'ssh.run[get.storwize.stats]'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: 1658dcaa4c3e45ada93b91e2a1648d08
+          name: 'Storwize: Get enclosurecanister'
+          type: DEPENDENT
+          key: storwize.get.enclosurecanister.raw
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          description: |
+            This command displays a detailed status for each canister in an
+            enclosure.
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // Define o nome da seção que queremos extrair
+                  var section = "lsenclosurecanister";
+
+                  // Regex para capturar tudo entre os delimitadores
+                  var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
+
+                  // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
+                  var match = value.match(regex);
+
+                  // Valida se encontrou a seção esperada e se ela tem conteúdo
+                  if (!match || match.length < 2 || !match[1].trim()) {
+                      throw "Seção 'lsenclosure' não encontrada ou vazia";
+                  }
+
+                  // Retorna apenas o conteúdo da seção
+                  return match[1].trim();
+            - type: CSV_TO_JSON
+              parameters:
+                - ':'
+                - ''
+                - '1'
+          master_item:
+            key: 'ssh.run[get.storwize.stats]'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: b9c20121f30f47ba9c76cec56d028eb0
+          name: 'Storwize: Get enclosurepsu'
+          type: DEPENDENT
+          key: storwize.get.enclosurepsu.raw
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          description: |
+            This command displays information about each power-supply unit (PSU) in
+            the enclosure.
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // Define o nome da seção que queremos extrair
+                  var section = "lsenclosurepsu";
+
+                  // Regex para capturar tudo entre os delimitadores
+                  var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
+
+                  // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
+                  var match = value.match(regex);
+
+                  // Valida se encontrou a seção esperada e se ela tem conteúdo
+                  if (!match || match.length < 2 || !match[1].trim()) {
+                      throw "Seção 'lsenclosure' não encontrada ou vazia";
+                  }
+
+                  // Retorna apenas o conteúdo da seção
+                  return match[1].trim();
+            - type: CSV_TO_JSON
+              parameters:
+                - ':'
+                - ''
+                - '1'
+          master_item:
+            key: 'ssh.run[get.storwize.stats]'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: 03bf08015b6a47cfbaf92932bfbed2a6
+          name: 'Storwize: Get host'
+          type: DEPENDENT
+          key: storwize.get.host.raw
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          description: |
+            This command returns a concise list or a detailed view of hosts visible
+            to the system.
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // Define o nome da seção que queremos extrair
+                  var section = "lshost";
+
+                  // Regex para capturar tudo entre os delimitadores
+                  var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
+
+                  // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
+                  var match = value.match(regex);
+
+                  // Valida se encontrou a seção esperada e se ela tem conteúdo
+                  if (!match || match.length < 2 || !match[1].trim()) {
+                      throw "Seção 'lsenclosure' não encontrada ou vazia";
+                  }
+
+                  // Retorna apenas o conteúdo da seção
+                  return match[1].trim();
+            - type: CSV_TO_JSON
+              parameters:
+                - ':'
+                - ''
+                - '1'
+          master_item:
+            key: 'ssh.run[get.storwize.stats]'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: 0fefc4e7530f44708fc33b4881c02fff
+          name: 'Storwize: Get mdisk'
+          type: DEPENDENT
+          key: storwize.get.mdisk.raw
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          description: |
+            This command returns a concise list or a detailed view of MDisks visible
+            to the system. This table provides the potential output for MDisks.
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // Define o nome da seção que queremos extrair
+                  var section = "lsmdisk";
+
+                  // Regex para capturar tudo entre os delimitadores
+                  var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
+
+                  // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
+                  var match = value.match(regex);
+
+                  // Valida se encontrou a seção esperada e se ela tem conteúdo
+                  if (!match || match.length < 2 || !match[1].trim()) {
+                      throw "Seção 'lsenclosure' não encontrada ou vazia";
+                  }
+
+                  // Retorna apenas o conteúdo da seção
+                  return match[1].trim();
+            - type: CSV_TO_JSON
+              parameters:
+                - ':'
+                - ''
+                - '1'
+          master_item:
+            key: 'ssh.run[get.storwize.stats]'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: f3a2342c71ef4e74a530d18278f6539e
+          name: 'Storwize: Get nodecanister'
+          type: DEPENDENT
+          key: storwize.get.nodecanister.raw
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          description: |
+            This command returns a concise list or a detailed view of nodes or node
+            canisters that are part of the system. This table provides the possible
+            values that are applicable to the attributes that are displayed as data
+            in the output views.
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // Define o nome da seção que queremos extrair
+                  var section = "lsnodecanister";
+                  var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
+
+                  var match = value.match(regex);
+
+                  if (!match || match.length < 2 || !match[1].trim()) {
+                      throw "Seção '" + section + "' não encontrada ou vazia";
+                  }
+
+                  var raw = match[1].trim().replace(/\r/g, '');
+                  var lines = raw.split("\n");
+
+                  if (lines.length < 2) {
+                      throw "Seção '" + section + "' está vazia ou incompleta";
+                  }
+
+                  var header = lines[0].split(":");
+                  var colCount = header.length;
+                  var cleaned = [lines[0]];
+
+                  for (var i = 1; i < lines.length; i++) {
+                      var fields = lines[i].split(":");
+                      if (fields.length > colCount) {
+                          fields = fields.slice(0, colCount);
+                      }
+                      while (fields.length < colCount) {
+                          fields.push(""); // completa se faltar
+                      }
+                      cleaned.push(fields.join(":"));
+                  }
+
+                  return cleaned.join("\n");
+            - type: CSV_TO_JSON
+              parameters:
+                - ':'
+                - ''
+                - '1'
+          master_item:
+            key: 'ssh.run[get.storwize.stats]'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: 0b2b91c07420464cbdbda01cedbbfe03
+          name: 'Storwize: Get portfc'
+          type: DEPENDENT
+          key: storwize.get.portfc.raw
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          description: |
+            This command enables you to view information about clustered system port
+            status.
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // Define o nome da seção que queremos extrair
+                  var section = "lsportfc";
+                  var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
+
+                  var match = value.match(regex);
+
+                  if (!match || match.length < 2 || !match[1].trim()) {
+                      throw "Seção '" + section + "' não encontrada ou vazia";
+                  }
+
+                  var raw = match[1].trim().replace(/\r/g, '');
+                  var lines = raw.split("\n");
+
+                  if (lines.length < 2) {
+                      throw "Seção '" + section + "' está vazia ou incompleta";
+                  }
+
+                  var header = lines[0].split(":");
+                  var colCount = header.length;
+                  var cleaned = [lines[0]];
+
+                  for (var i = 1; i < lines.length; i++) {
+                      var fields = lines[i].split(":");
+                      if (fields.length > colCount) {
+                          fields = fields.slice(0, colCount);
+                      }
+                      while (fields.length < colCount) {
+                          fields.push(""); // completa se faltar
+                      }
+                      cleaned.push(fields.join(":"));
+                  }
+
+                  return cleaned.join("\n");
+            - type: CSV_TO_JSON
+              parameters:
+                - ':'
+                - ''
+                - '1'
+          master_item:
+            key: 'ssh.run[get.storwize.stats]'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: ee77dfbbf6394336bdfad788ef031bb5
+          name: 'Storwize: Get portsas'
+          type: DEPENDENT
+          key: storwize.get.portsas.raw
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          description: 'This command displays information about system port status.'
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // Define o nome da seção que queremos extrair
+                  var section = "lsportsas";
+
+                  // Regex para capturar tudo entre os delimitadores
+                  var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
+
+                  // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
+                  var match = value.match(regex);
+
+                  // Valida se encontrou a seção esperada e se ela tem conteúdo
+                  if (!match || match.length < 2 || !match[1].trim()) {
+                      throw "Seção 'lsenclosure' não encontrada ou vazia";
+                  }
+
+                  // Retorna apenas o conteúdo da seção
+                  return match[1].trim();
+            - type: CSV_TO_JSON
+              parameters:
+                - ':'
+                - ''
+                - '1'
+          master_item:
+            key: 'ssh.run[get.storwize.stats]'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: d07233a5c344422f87b91a18d1ddb713
+          name: 'Storwize: Get quorum'
+          type: DEPENDENT
+          key: storwize.get.quorum.raw
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          description: |
+            This command displays a concise list or a detailed view of the MDisks or
+            drives that the system is using to store quorum data. This information
+            can be used to ensure that the quorum candidates are on separate storage
+            subsystems.
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // Define o nome da seção que queremos extrair
+                  var section = "lsquorum";
+
+                  // Regex para capturar tudo entre os delimitadores
+                  var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
+
+                  // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
+                  var match = value.match(regex);
+
+                  // Valida se encontrou a seção esperada e se ela tem conteúdo
+                  if (!match || match.length < 2 || !match[1].trim()) {
+                      throw "Seção 'lsenclosure' não encontrada ou vazia";
+                  }
+
+                  // Retorna apenas o conteúdo da seção
+                  return match[1].trim();
+            - type: CSV_TO_JSON
+              parameters:
+                - ':'
+                - ''
+                - '1'
+          master_item:
+            key: 'ssh.run[get.storwize.stats]'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: fe3d22443df148fba85a8a0b93e87532
+          name: 'Storwize: Get system'
+          type: DEPENDENT
+          key: storwize.get.system.raw
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // Define o nome da seção que queremos extrair
+                  var section = "lssystem";
+
+                  // Regex para capturar tudo entre os delimitadores
+                  var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
+
+                  // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
+                  var match = value.match(regex);
+
+                  // Valida se encontrou a seção esperada e se ela tem conteúdo
+                  if (!match || match.length < 2 || !match[1].trim()) {
+                      throw "Seção 'lsenclosure' não encontrada ou vazia";
+                  }
+
+                  // Retorna apenas o conteúdo da seção
+                  return match[1].trim();
+            - type: CSV_TO_JSON
+              parameters:
+                - ':'
+                - ''
+                - '0'
+            - type: STR_REPLACE
+              parameters:
+                - '"1":'
+                - '"Stat":'
+            - type: STR_REPLACE
+              parameters:
+                - '"2":'
+                - '"Value":'
+          master_item:
+            key: 'ssh.run[get.storwize.stats]'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: a35c14739ecf4a988a81faaf60b95a73
+          name: 'Storwize: Get systemstats'
+          type: DEPENDENT
+          key: storwize.get.systemstats.raw
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // Define o nome da seção que queremos extrair
+                  var section = "lssystemstats";
+
+                  // Regex para capturar tudo entre os delimitadores
+                  var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
+
+                  // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
+                  var match = value.match(regex);
+
+                  // Valida se encontrou a seção esperada e se ela tem conteúdo
+                  if (!match || match.length < 2 || !match[1].trim()) {
+                      throw "Seção 'lsenclosure' não encontrada ou vazia";
+                  }
+
+                  // Retorna apenas o conteúdo da seção
+                  return match[1].trim();
+            - type: CSV_TO_JSON
+              parameters:
+                - ':'
+                - ''
+                - '1'
+          master_item:
+            key: 'ssh.run[get.storwize.stats]'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: acd7ccf882af4364b41adb93604045f6
+          name: 'Storwize: Get vdisk'
+          type: DEPENDENT
+          key: storwize.get.vdisk.raw
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // Define o nome da seção que queremos extrair
+                  var section = "lsvdisk";
+
+                  // Regex para capturar tudo entre os delimitadores
+                  var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
+
+                  // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
+                  var match = value.match(regex);
+
+                  // Valida se encontrou a seção esperada e se ela tem conteúdo
+                  if (!match || match.length < 2 || !match[1].trim()) {
+                      throw "Seção 'lsenclosure' não encontrada ou vazia";
+                  }
+
+                  // Retorna apenas o conteúdo da seção
+                  return match[1].trim();
+            - type: CSV_TO_JSON
+              parameters:
+                - ':'
+                - ''
+                - '1'
+          master_item:
+            key: 'ssh.run[get.storwize.stats]'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: 67ff7476ef3a4a94a12b61d52fe3578b
+          name: 'Storwize: System location'
+          type: DEPENDENT
+          key: storwize.system.location
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.Stat==''location'')].Value.first()'
+          master_item:
+            key: storwize.get.system.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 0f74cc1ea32f45e097d624e559c07126
+          name: 'Storwize: System location physical'
+          type: DEPENDENT
+          key: storwize.system.location.physical
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.Stat==''email_contact_location'')].Value.first()'
+          master_item:
+            key: storwize.get.system.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 75935c19429f40dca7fb1e57d363f1a2
+          name: 'Storwize: System product name'
+          type: DEPENDENT
+          key: storwize.system.product_name
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          description: 'Indicates the product name (an alphanumeric string of no more than 62 characters).'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.Stat==''product_name'')].Value.first()'
+          master_item:
+            key: storwize.get.system.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 552f174f15944c85865df67540354b82
+          name: 'Storwize: System vdisk allocated space'
+          type: DEPENDENT
+          key: storwize.system.space_allocated_to_vdisks
+          delay: '0'
+          trends: '0'
+          units: B
+          description: 'Indicates the sum of mdiskgrp real_capacity.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.Stat==''space_allocated_to_vdisks'')].Value.first()'
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
+
+                  if (!matches) {
+                      throw "Formato inválido: " + value;
+                  }
+
+                  var number = matches[1].replace(',', '.');
+                  var unit = matches[2].toUpperCase();
+
+                  var size = parseFloat(number);
+                  if (isNaN(size)) {
+                      throw "Número inválido: " + number;
+                  }
+
+                  var multipliers = {
+                      B: 1,
+                      KB: 1e3,
+                      MB: 1e6,
+                      GB: 1e9,
+                      TB: 1e12,
+                      PB: 1e15,
+                      KIB: 1024,
+                      MIB: 1024 ** 2,
+                      GIB: 1024 ** 3,
+                      TIB: 1024 ** 4,
+                      PIB: 1024 ** 5
+                  };
+
+                  if (!(unit in multipliers)) {
+                      throw "Unidade desconhecida: " + unit;
+                  }
+
+                  return size * multipliers[unit];
+          master_item:
+            key: storwize.get.system.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 92695c5a759e4ef6bb691ea45e9320eb
+          name: 'Storwize: System Compression CPU percent'
+          type: DEPENDENT
+          key: 'storwize.system.stat[compression_cpu_pc]'
+          delay: '0'
+          units: '%'
+          description: 'Displays the percentage of allocated CPU capacity that is used for compression.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''compression_cpu_pc'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 6ae6d31eb9bc4b59b7318da33baea8b5
+          name: 'Storwize: System CPU percent'
+          type: DEPENDENT
+          key: 'storwize.system.stat[cpu_pc]'
+          delay: '0'
+          units: '%'
+          description: 'Displays the percentage of allocated CPU capacity that is used for the system.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''cpu_pc'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 08ce71f284b64b61b17239fd3687c04f
+          name: 'Storwize: System Drive Read IO'
+          type: DEPENDENT
+          key: 'storwize.system.stat[drive_r_io]'
+          delay: '0'
+          units: iops
+          description: 'Displays the average MBps for read operations to drives.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''drive_r_io'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: e8dbc8059f4848cc9dcabbec004c4545
+          name: 'Storwize: System Drive Read mb'
+          type: DEPENDENT
+          key: 'storwize.system.stat[drive_r_mb]'
+          delay: '0'
+          units: mbs
+          description: 'Displays the average MBps for read operations to drives.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''drive_r_mb'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: ce62ecc1fc284063a3d0b134de572b58
+          name: 'Storwize: System Drive Read ms'
+          type: DEPENDENT
+          key: 'storwize.system.stat[drive_r_ms]'
+          delay: '0'
+          units: ms
+          description: 'Displays the average response time (ms) for read requests to drives.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''drive_r_ms'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 9008cf9077f643b5bc9b5ead89ab0f73
+          name: 'Storwize: System Drive Write IO'
+          type: DEPENDENT
+          key: 'storwize.system.stat[drive_w_io]'
+          delay: '0'
+          units: mbs
+          description: 'Displays the average IOPS for write operations to drives.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''drive_w_io'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 5ecad42df0734688a28c5d2ac37eddb9
+          name: 'Storwize: System Drive Write mb'
+          type: DEPENDENT
+          key: 'storwize.system.stat[drive_w_mb]'
+          delay: '0'
+          units: mbs
+          description: 'Displays the average MBps for write operations to drives.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''drive_w_mb'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 495557a6e48c474881f044fcb304434c
+          name: 'Storwize: System Drive Write ms'
+          type: DEPENDENT
+          key: 'storwize.system.stat[drive_w_ms]'
+          delay: '0'
+          units: ms
+          description: 'Displays the average response time (ms) for write requests to drives.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''drive_w_ms'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 637411bf91b3412c963d9d9fd935e3df
+          name: 'Storwize: System FC IO'
+          type: DEPENDENT
+          key: 'storwize.system.stat[fc_io]'
+          delay: '0'
+          units: iops
+          description: 'Displays the total input/output (I/O) operations that are transferred per seconds for Fibre Channel traffic on the system. This value includes host I/O and any bandwidth that is used for communication within the system.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''fc_io'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 35521cbf0bfb4b348b8f5cd05ea4cc46
+          name: 'Storwize: System FC mb'
+          type: DEPENDENT
+          key: 'storwize.system.stat[fc_mb]'
+          delay: '0'
+          units: mbs
+          description: 'Displays the total number of megabytes transferred per second (MBps) for Fibre Channel traffic on the system. This value includes host I/O and any bandwidth that is used for communication within the system.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''fc_mb'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 1851fc56eda24a9d899bc642978e5c4b
+          name: 'Storwize: System ISCSI IO'
+          type: DEPENDENT
+          key: 'storwize.system.stat[iscsi_io]'
+          delay: '0'
+          units: iops
+          description: 'Displays the total IOPS for iSCSI traffic on the system.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''iscsi_io'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 4c086aa86806482fa32f8e004823919c
+          name: 'Storwize: System ISCSI mb'
+          type: DEPENDENT
+          key: 'storwize.system.stat[iscsi_mb]'
+          delay: '0'
+          units: mbs
+          description: 'Displays the total mbs for iSCSI traffic on the system.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''iscsi_mb'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 3bbad66c0d5e4189aad3e03d784f7e20
+          name: 'Storwize: System mDisk Read IO'
+          type: DEPENDENT
+          key: 'storwize.system.stat[mdisk_r_io]'
+          delay: '0'
+          units: iops
+          description: 'Displays the average MBps for read operations to MDisks.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''mdisk_r_io'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 419654ab262f4ab1b38515a05e5ede76
+          name: 'Storwize: System mDisk Read mb'
+          type: DEPENDENT
+          key: 'storwize.system.stat[mdisk_r_mb]'
+          delay: '0'
+          units: mbs
+          description: 'Displays the average MBps for read operations to MDisks.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''mdisk_r_mb'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 0d105bb2903f4f54b5c9a57cc7fdfc4c
+          name: 'Storwize: System mDisk Read ms'
+          type: DEPENDENT
+          key: 'storwize.system.stat[mdisk_r_ms]'
+          delay: '0'
+          units: ms
+          description: 'Displays the average response time (ms) for read requests to MDisks.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''mdisk_r_ms'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 5f74d6155f1140439d401e2280015560
+          name: 'Storwize: System mDisk Write IO'
+          type: DEPENDENT
+          key: 'storwize.system.stat[mdisk_w_io]'
+          delay: '0'
+          units: iops
+          description: 'Displays the average IOPS for write operations to MDisks.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''mdisk_w_io'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 9b07e1a049e74484a1ed01b3ae781f94
+          name: 'Storwize: System mDisk Write mb'
+          type: DEPENDENT
+          key: 'storwize.system.stat[mdisk_w_mb]'
+          delay: '0'
+          units: mbs
+          description: 'Displays the average MBps for write operations to MDisks.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''mdisk_w_mb'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 584454da1f6c4c20a8c7039558ec8fd4
+          name: 'Storwize: System mDisk Write ms'
+          type: DEPENDENT
+          key: 'storwize.system.stat[mdisk_w_ms]'
+          delay: '0'
+          units: ms
+          description: 'Displays the average response time (ms) for write requests to MDisks.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''mdisk_w_ms'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: b00e2a2ca8a0494cbd348470c507ac1b
+          name: 'Storwize: System Power'
+          type: DEPENDENT
+          key: 'storwize.system.stat[power_w]'
+          delay: '0'
+          units: W
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''power_w'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 342fed5828d84d85aed05269692bcb0d
+          name: 'Storwize: System SAS IO'
+          type: DEPENDENT
+          key: 'storwize.system.stat[sas_io]'
+          delay: '0'
+          units: iops
+          description: 'Displays the total IOPS for SAS traffic. Includes host I/O and background RAID activity.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''sas_io'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 487551a385924ec195820a76b6c1b245
+          name: 'Storwize: System SAS mb'
+          type: DEPENDENT
+          key: 'storwize.system.stat[sas_mb]'
+          delay: '0'
+          units: mbs
+          description: 'Displays the total MBps for SAS traffic. Includes host I/O and background RAID activity.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''sas_mb'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: df1eddc914b34482973237ab0f86919c
+          name: 'Storwize: System Temp'
+          type: DEPENDENT
+          key: 'storwize.system.stat[temp_c]'
+          delay: '0'
+          units: C
+          description: 'System temperature in Celsius'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''temp_c'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 1a34f07c940f47c3965a7d6bd9a79b73
+          name: 'Storwize: System Total cache'
+          type: DEPENDENT
+          key: 'storwize.system.stat[total_cache_pc]'
+          delay: '0'
+          units: '%'
+          description: 'Displays the total percentage of both write and read cache usage for the node.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''total_cache_pc'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: b99e632000b14d8bb7859b57166ed5ae
+          name: 'Storwize: System vDisk IO'
+          type: DEPENDENT
+          key: 'storwize.system.stat[vdisk_io]'
+          delay: '0'
+          units: iops
+          description: 'Displays the average IOPS for read/write operations to volumes.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''vdisk_io'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 67b1f634f93949c19c7b5bb46f17798a
+          name: 'Storwize: System vDisk mb'
+          type: DEPENDENT
+          key: 'storwize.system.stat[vdisk_mb]'
+          delay: '0'
+          units: mbs
+          description: 'Displays the average MBps for read/write operations to volumes. Note: Only write values are shown.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''vdisk_mb'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: ecbfa6da6ba6458dbda36e40de0b4c4e
+          name: 'Storwize: System vDisk ms'
+          type: DEPENDENT
+          key: 'storwize.system.stat[vdisk_ms]'
+          delay: '0'
+          units: ms
+          description: 'Displays the average response time (ms) for read/write requests to volumes.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''vdisk_ms'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 6305455f6aa449cf857caa35b252409e
+          name: 'Storwize: System vDisk Read IO'
+          type: DEPENDENT
+          key: 'storwize.system.stat[vdisk_r_io]'
+          delay: '0'
+          units: iops
+          description: 'Displays the average IOPS for read operations to volumes.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''vdisk_r_io'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 0322243c64ae486d80df74926e30763d
+          name: 'Storwize: System vDisk Read mb'
+          type: DEPENDENT
+          key: 'storwize.system.stat[vdisk_r_mb]'
+          delay: '0'
+          units: mbs
+          description: 'Displays the average MBps for read operations to volumes.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''vdisk_r_mb'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: dd78689945c14a5ebe96d890743bc83d
+          name: 'Storwize: System vDisk Read ms'
+          type: DEPENDENT
+          key: 'storwize.system.stat[vdisk_r_ms]'
+          delay: '0'
+          units: iops
+          description: 'Displays the average response time (ms) for read requests to volumes.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''vdisk_r_ms'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 26428b8938fe42e4914574b8cbacc3ce
+          name: 'Storwize: System vDisk Write IO'
+          type: DEPENDENT
+          key: 'storwize.system.stat[vdisk_w_io]'
+          delay: '0'
+          units: iops
+          description: 'Displays the average IOPS for write operations to volumes.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''vdisk_w_io'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: b7a501eb91d249e9bd9762922879f9d2
+          name: 'Storwize: System vDisk Write mb'
+          type: DEPENDENT
+          key: 'storwize.system.stat[vdisk_w_mb]'
+          delay: '0'
+          units: mbs
+          description: 'Displays the average MBps for write operations to volumes.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''vdisk_w_mb'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 0e6d29401f6f4026ac1e94226e6c4107
+          name: 'Storwize: System vDisk Write ms'
+          type: DEPENDENT
+          key: 'storwize.system.stat[vdisk_w_ms]'
+          delay: '0'
+          units: ms
+          description: 'Displays the average response time (ms) for write requests to volumes.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''vdisk_w_ms'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: a950e52cd0a94fbd94727b2d6ca2bf32
+          name: 'Storwize: System Write cache'
+          type: DEPENDENT
+          key: 'storwize.system.stat[write_cache_pc]'
+          delay: '0'
+          units: '%'
+          description: 'Displays the percentage of write cache usage for the node.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.stat_name==''write_cache_pc'')].stat_current.first()'
+          master_item:
+            key: storwize.get.systemstats.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 62ebcc5b35ee433693b630489563b700
+          name: 'Storwize: System allocated extent capacity'
+          type: DEPENDENT
+          key: storwize.system.total_allocated_extent_capacity
+          delay: '0'
+          trends: '0'
+          units: B
+          description: 'Indicates the total size of all extents that are allocated to volumes or otherwise in use by the system.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.Stat==''total_allocated_extent_capacity'')].Value.first()'
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
+
+                  if (!matches) {
+                      throw "Formato inválido: " + value;
+                  }
+
+                  var number = matches[1].replace(',', '.');
+                  var unit = matches[2].toUpperCase();
+
+                  var size = parseFloat(number);
+                  if (isNaN(size)) {
+                      throw "Número inválido: " + number;
+                  }
+
+                  var multipliers = {
+                      B: 1,
+                      KB: 1e3,
+                      MB: 1e6,
+                      GB: 1e9,
+                      TB: 1e12,
+                      PB: 1e15,
+                      KIB: 1024,
+                      MIB: 1024 ** 2,
+                      GIB: 1024 ** 3,
+                      TIB: 1024 ** 4,
+                      PIB: 1024 ** 5
+                  };
+
+                  if (!(unit in multipliers)) {
+                      throw "Unidade desconhecida: " + unit;
+                  }
+
+                  return size * multipliers[unit];
+          master_item:
+            key: storwize.get.system.raw
+          tags:
+            - tag: component
+              value: stats
+        - uuid: 993a7abd059f4feba6988d65e43e80aa
+          name: 'Storwize: System free space'
+          type: DEPENDENT
+          key: storwize.system.total_free_space
+          delay: '0'
+          trends: '0'
+          units: B
+          description: 'Indicates the sum of mdiskgrp free_capacity.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$[?(@.Stat==''total_free_space'')].Value.first()'
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
+
+                  if (!matches) {
+                      throw "Formato inválido: " + value;
+                  }
+
+                  var number = matches[1].replace(',', '.');
+                  var unit = matches[2].toUpperCase();
+
+                  var size = parseFloat(number);
+                  if (isNaN(size)) {
+                      throw "Número inválido: " + number;
+                  }
+
+                  var multipliers = {
+                      B: 1,
+                      KB: 1e3,
+                      MB: 1e6,
+                      GB: 1e9,
+                      TB: 1e12,
+                      PB: 1e15,
+                      KIB: 1024,
+                      MIB: 1024 ** 2,
+                      GIB: 1024 ** 3,
+                      TIB: 1024 ** 4,
+                      PIB: 1024 ** 5
+                  };
+
+                  if (!(unit in multipliers)) {
+                      throw "Unidade desconhecida: " + unit;
+                  }
+
+                  return size * multipliers[unit];
+          master_item:
+            key: storwize.get.system.raw
+          tags:
+            - tag: component
+              value: stats
+      discovery_rules:
+        - uuid: c4ab1114df334d7f8e9a3583e3105903
+          name: 'Storwize: Array discovery'
+          type: DEPENDENT
+          key: storwize.array.discovery
+          delay: '0'
+          item_prototypes:
+            - uuid: 35df13667de7453e8dfecab000ea6e1a
+              name: 'Storwize: mDisk {#MDISK.NAME} Group'
+              type: DEPENDENT
+              key: 'storwize.mdisk.raid.grp[{#MDISK.NAME}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: 'Indicates the name of the storage pool that the volume belongs to. If the volume has more than one copy, these fields display many.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.mdisk_name==''{#MDISK.NAME}'')].mdisk_grp_name.first()'
+              master_item:
+                key: storwize.get.array.raw
+              tags:
+                - tag: mdisk_grp
+                  value: '{#MDISK.GRP}'
+                - tag: mdisk_id
+                  value: '{#MDISK.ID}'
+                - tag: mdisk_name
+                  value: '{#MDISK.NAME}'
+            - uuid: bd6eddaed8e249a7ac92e641d604ba89
+              name: 'Storwize: mDisk {#MDISK.NAME} Raid Level'
+              type: DEPENDENT
+              key: 'storwize.mdisk.raid.level[{#MDISK.NAME}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: |
+                raid_level: The RAID level of the array
+
+                Value: ( RAID0 , RAID1 , RAID5 , RAID6 , RAID10 ).
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.mdisk_name==''{#MDISK.NAME}'')].raid_level.first()'
+              master_item:
+                key: storwize.get.array.raw
+              tags:
+                - tag: mdisk_grp
+                  value: '{#MDISK.GRP}'
+                - tag: mdisk_id
+                  value: '{#MDISK.ID}'
+                - tag: mdisk_name
+                  value: '{#MDISK.NAME}'
+            - uuid: dbcf0c21a7774ce08e42b5beb5b764db
+              name: 'Storwize: mDisk {#MDISK.NAME} Raid Status'
+              type: DEPENDENT
+              key: 'storwize.mdisk.raid.status[{#MDISK.NAME}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: |
+                raid_status: Indicates the RAID status.
+                Values include offline, degraded, syncing, initializing, online, expanding.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.mdisk_name==''{#MDISK.NAME}'')].raid_status.first()'
+              master_item:
+                key: storwize.get.array.raw
+              tags:
+                - tag: mdisk_grp
+                  value: '{#MDISK.GRP}'
+                - tag: mdisk_id
+                  value: '{#MDISK.ID}'
+                - tag: mdisk_name
+                  value: '{#MDISK.NAME}'
+            - uuid: 2ddb8375d35d4f279e93739b46368892
+              name: 'Storwize: mDisk {#MDISK.NAME} TIer'
+              type: DEPENDENT
+              key: 'storwize.mdisk.raid.tier[{#MDISK.NAME}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: |
+                tier: Tier assigned to the array (auto or manual).
+
+                Values: tier0_flash, tier1_flash, tier_enterprise, tier_nearline, tier_scm.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.mdisk_name==''{#MDISK.NAME}'')].tier.first()'
+              master_item:
+                key: storwize.get.array.raw
+              tags:
+                - tag: mdisk_grp
+                  value: '{#MDISK.GRP}'
+                - tag: mdisk_id
+                  value: '{#MDISK.ID}'
+                - tag: mdisk_name
+                  value: '{#MDISK.NAME}'
+          master_item:
+            key: storwize.get.array.raw
+          lld_macro_paths:
+            - lld_macro: '{#MDISK.GRP}'
+              path: $.mdisk_grp_name
+            - lld_macro: '{#MDISK.ID}'
+              path: $.mdisk_id
+            - lld_macro: '{#MDISK.NAME}'
+              path: $.mdisk_name
+        - uuid: 02fa05fa7a294586ac0ae75fa4fa2178
+          name: 'Storwize: Drive discovery'
+          type: DEPENDENT
+          key: storwize.drive.discovery
+          delay: '0'
+          item_prototypes:
+            - uuid: cff1ff3b37e44e9b85d9a72101c5bf44
+              name: 'Storwize: Drive ID: {#DRIVE.ID} Port 1 Status'
+              type: DEPENDENT
+              key: 'storwize.drive.port1.status[{#DRIVE.ID}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: 'Indicates the connectivity status of the drive''s first port. The values are online , offline , or excluded .  Note: Port 1 is attached to the node that has a panel name that ends in -1 .'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.id==''{#DRIVE.ID}'')].port_1_status.first()'
+              master_item:
+                key: storwize.get.drive.raw
+              tags:
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+                - tag: mdisk_id
+                  value: '{#MDISK.ID}'
+                - tag: mdisk_name
+                  value: '{#MDISK.NAME}'
+              trigger_prototypes:
+                - uuid: f9c92b0898ce4e32a412d16ec5de011b
+                  expression: 'find(/IBM Storwize by SSH/storwize.drive.port1.status[{#DRIVE.ID}],,"like","online")=0'
+                  recovery_mode: RECOVERY_EXPRESSION
+                  recovery_expression: 'find(/IBM Storwize by SSH/storwize.drive.port1.status[{#DRIVE.ID}],,"like","online")=1'
+                  name: 'Storwize: Drive ID: {#DRIVE.ID} Port 1 Status is {ITEM.VALUE}'
+                  priority: HIGH
+                  manual_close: 'YES'
+            - uuid: 6bd6cbb235614e89a5301d726e9cd79c
+              name: 'Storwize: Drive ID: {#DRIVE.ID} Port 2 Status'
+              type: DEPENDENT
+              key: 'storwize.drive.port2.status[{#DRIVE.ID}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: 'Indicates the connectivity status of the drive''s first port. The values are online , offline , or excluded .  Note: Port 2 is attached to the node that has a panel name that ends in -2 .'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.id==''{#DRIVE.ID}'')].port_2_status.first()'
+              master_item:
+                key: storwize.get.drive.raw
+              tags:
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+                - tag: mdisk_id
+                  value: '{#MDISK.ID}'
+                - tag: mdisk_name
+                  value: '{#MDISK.NAME}'
+            - uuid: 3763f225cc814f52a0604bc162089157
+              name: 'Storwize: Drive ID: {#DRIVE.ID} Slot'
+              type: DEPENDENT
+              key: 'storwize.drive.slot[{#DRIVE.ID}]'
+              delay: '0'
+              trends: '0'
+              description: 'Indicates the slot_id of the drive in the enclosure or node. It can be referred to as the drive bay or location. This value can be blank.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.id==''{#DRIVE.ID}'')].slot_id.first()'
+              master_item:
+                key: storwize.get.drive.raw
+              tags:
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+                - tag: mdisk_id
+                  value: '{#MDISK.ID}'
+                - tag: mdisk_name
+                  value: '{#MDISK.NAME}'
+            - uuid: 2418cb7b279a4c3691e0565d8c8847c1
+              name: 'Storwize: Drive ID: {#DRIVE.ID} Status'
+              type: DEPENDENT
+              key: 'storwize.drive.status[{#DRIVE.ID}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: 'Indicates the summary status of the drive.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.id==''{#DRIVE.ID}'')].status.first()'
+              master_item:
+                key: storwize.get.drive.raw
+              tags:
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+                - tag: mdisk_id
+                  value: '{#MDISK.ID}'
+                - tag: mdisk_name
+                  value: '{#MDISK.NAME}'
+              trigger_prototypes:
+                - uuid: 41d2dfae7ebb46e7b107e2603440037f
+                  expression: 'find(/IBM Storwize by SSH/storwize.drive.status[{#DRIVE.ID}],,"like","online")=0'
+                  recovery_mode: RECOVERY_EXPRESSION
+                  recovery_expression: 'find(/IBM Storwize by SSH/storwize.drive.status[{#DRIVE.ID}],,"like","online")=1'
+                  name: 'Storwize: Drive ID: {#DRIVE.ID} Status is {ITEM.VALUE}'
+                  priority: AVERAGE
+                  manual_close: 'YES'
+          trigger_prototypes:
+            - uuid: a53e63f5aa19410ea1139a117cc5ea2c
+              expression: 'find(/IBM Storwize by SSH/storwize.drive.port2.status[{#DRIVE.ID}],,"like","online")=0'
+              recovery_mode: RECOVERY_EXPRESSION
+              recovery_expression: 'find(/IBM Storwize by SSH/storwize.drive.port1.status[{#DRIVE.ID}],,"like","online")=1'
+              name: 'Storwize: Drive ID: {#DRIVE.ID} Port 2 Status is {ITEM.VALUE}'
+              priority: HIGH
+              manual_close: 'YES'
+          master_item:
+            key: storwize.get.drive.raw
+          lld_macro_paths:
+            - lld_macro: '{#DRIVE.ID}'
+              path: $.id
+            - lld_macro: '{#ENCLOSURE.ID}'
+              path: $.enclosure_id
+            - lld_macro: '{#MDISK.ID}'
+              path: $.mdisk_id
+            - lld_macro: '{#MDISK.NAME}'
+              path: $.mdisk_name
+        - uuid: 834a4d9d6f31422aa2b14564475b130b
+          name: 'Storwize: Enclosure Battery discovery'
+          type: DEPENDENT
+          key: storwize.enclosure.battery.discovery
+          delay: '0'
+          item_prototypes:
+            - uuid: c21269a16eaa4f449ca1b395e9af2f5f
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Battery {#BATTERY.ID} Charge percent'
+              type: DEPENDENT
+              key: 'storwize.enclosure.battery.charge.percent[{#ENCLOSURE.ID},{#BATTERY.ID}]'
+              delay: '0'
+              trends: '0'
+              units: '%'
+              description: 'Indicates the charge of battery (in a percentage).'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.battery_id==''{#BATTERY.ID}'')].percent_charged.first()'
+              master_item:
+                key: storwize.get.enclosurebattery.raw
+              tags:
+                - tag: battery_id
+                  value: '{#BATTERY.ID}'
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+            - uuid: 378b1b15fdc945709444378d07c5f392
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Battery {#BATTERY.ID} Charging Status'
+              type: DEPENDENT
+              key: 'storwize.enclosure.battery.charge.status[{#ENCLOSURE.ID},{#BATTERY.ID}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.battery_id==''{#BATTERY.ID}'')].charging_status.first()'
+              master_item:
+                key: storwize.get.enclosurebattery.raw
+              tags:
+                - tag: battery_id
+                  value: '{#BATTERY.ID}'
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+            - uuid: f23dc39b96924f7582187ada2fe83558
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Battery {#BATTERY.ID} Cicle count'
+              type: DEPENDENT
+              key: 'storwize.enclosure.battery.cicle.count[{#ENCLOSURE.ID},{#BATTERY.ID}]'
+              delay: '0'
+              trends: '0'
+              description: 'Identifies the number of charge or discharge cycles that are performed on the battery.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.battery_id==''{#BATTERY.ID}'')].cycle_count.first()'
+              master_item:
+                key: storwize.get.enclosurebattery.raw
+              tags:
+                - tag: battery_id
+                  value: '{#BATTERY.ID}'
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+            - uuid: ee0766f0ec6648ca820719f1a0b730e6
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Battery {#BATTERY.ID} End of life'
+              type: DEPENDENT
+              key: 'storwize.enclosure.battery.eof[{#ENCLOSURE.ID},{#BATTERY.ID}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: 'Identifies the battery''s end of life (with a warning noise). The values are yes and no. Important: Replace the battery.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.battery_id==''{#BATTERY.ID}'')].end_of_life_warning.first()'
+              master_item:
+                key: storwize.get.enclosurebattery.raw
+              tags:
+                - tag: battery_id
+                  value: '{#BATTERY.ID}'
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+              trigger_prototypes:
+                - uuid: c9f55345a5834964bc8081d081bcac8a
+                  expression: 'find(/IBM Storwize by SSH/storwize.enclosure.battery.eof[{#ENCLOSURE.ID},{#BATTERY.ID}],,"like","yes")=1'
+                  name: 'Storwize: Enclosure {#ENCLOSURE.ID} Battery {#BATTERY.ID} in End of life'
+                  priority: HIGH
+                  manual_close: 'YES'
+            - uuid: b37f0653dced4c95bdbefce339f98322
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Battery {#BATTERY.ID} Powered on'
+              type: DEPENDENT
+              key: 'storwize.enclosure.battery.power.on[{#ENCLOSURE.ID},{#BATTERY.ID}]'
+              delay: '0'
+              trends: '0'
+              units: h
+              description: 'Identifies the number of hours the battery is in a powered node (not necessarily the same node).'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.battery_id==''{#BATTERY.ID}'')].powered_on_hours.first()'
+              master_item:
+                key: storwize.get.enclosurebattery.raw
+              tags:
+                - tag: battery_id
+                  value: '{#BATTERY.ID}'
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+            - uuid: dfa0829c33c540ce95fe39a25885ffb1
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Battery {#BATTERY.ID} Status'
+              type: DEPENDENT
+              key: 'storwize.enclosure.battery.status[{#ENCLOSURE.ID},{#BATTERY.ID}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: |
+                Identifies the status of the battery:
+
+                * online indicates that the battery is present and working as usual.
+                * degraded indicates that the battery is present but not working as usual.
+                * offline indicates that the battery cannot be detected.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.battery_id==''{#BATTERY.ID}'')].status.first()'
+              master_item:
+                key: storwize.get.enclosurebattery.raw
+              tags:
+                - tag: battery_id
+                  value: '{#BATTERY.ID}'
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+              trigger_prototypes:
+                - uuid: 99d6ec865bae4c8a89ac5bb475b92996
+                  expression: 'find(/IBM Storwize by SSH/storwize.enclosure.battery.status[{#ENCLOSURE.ID},{#BATTERY.ID}],,"like","online")=0'
+                  recovery_mode: RECOVERY_EXPRESSION
+                  recovery_expression: 'find(/IBM Storwize by SSH/storwize.enclosure.battery.status[{#ENCLOSURE.ID},{#BATTERY.ID}],,"like","online")=1'
+                  name: 'Storwize: Enclosure {#ENCLOSURE.ID} Battery {#BATTERY.ID} Status is {ITEM.VALUE}'
+                  manual_close: 'YES'
+          master_item:
+            key: storwize.get.enclosurebattery.raw
+          lld_macro_paths:
+            - lld_macro: '{#BATTERY.ID}'
+              path: $.battery_id
+            - lld_macro: '{#ENCLOSURE.ID}'
+              path: $.enclosure_id
+        - uuid: f6852ade0c424657b4eee77d33d211e7
+          name: 'Storwize: Enclosure Canister discovery'
+          type: DEPENDENT
+          key: storwize.enclosure.canister.discovery
+          delay: '0'
+          item_prototypes:
+            - uuid: 3fcf50797dff40bcbc8a6f1f95c41ba2
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Canister {#CANISTER.ID} SAS_port_1_status'
+              type: DEPENDENT
+              key: 'storwize.enclosure.canister.port1.status[{#ENCLOSURE.ID},{#CANISTER.ID}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: |
+                Indicates whether there is damage to the cable between SAS ports:
+                * online
+                * offline
+                * excluded (meaning logged in but cannot communicate with the canister)
+                * degraded (meaning the SAS cable is not fully functional)
+                * Blank (which can appear on control canisters; see lsportsas).
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.canister_id==''{#CANISTER.ID}'')].SAS_port_1_status.first()'
+              master_item:
+                key: storwize.get.enclosurecanister.raw
+              tags:
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+              trigger_prototypes:
+                - uuid: 7e80ef3112804aa6937ca7ed903fb44b
+                  expression: 'find(/IBM Storwize by SSH/storwize.enclosure.canister.port1.status[{#ENCLOSURE.ID},{#CANISTER.ID}],,"like","online")=0'
+                  name: 'Storwize: Enclosure {#ENCLOSURE.ID} Canister {#CANISTER.ID} SAS_port_1_status is {ITEM.VALUE}'
+                  priority: HIGH
+                  manual_close: 'YES'
+            - uuid: ed66f2ea14954ca2a3cc741375ebc8b4
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Canister {#CANISTER.ID} SAS_port_2_status'
+              type: DEPENDENT
+              key: 'storwize.enclosure.canister.port2.status[{#ENCLOSURE.ID},{#CANISTER.ID}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: |
+                Indicates whether there is damage to the cable between SAS ports:
+                * online
+                * offline
+                * excluded (meaning logged in but cannot communicate with the canister)
+                * degraded (meaning the SAS cable is not fully functional)
+                * Blank (which can appear on control canisters; see lsportsas).
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.canister_id==''{#CANISTER.ID}'')].SAS_port_2_status.first()'
+              master_item:
+                key: storwize.get.enclosurecanister.raw
+              tags:
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+              trigger_prototypes:
+                - uuid: b17ae8e251254e68866393c3bfde6bed
+                  expression: 'find(/IBM Storwize by SSH/storwize.enclosure.canister.port2.status[{#ENCLOSURE.ID},{#CANISTER.ID}],,"like","online")=0'
+                  name: 'Storwize: Enclosure {#ENCLOSURE.ID} Canister {#CANISTER.ID} SAS_port_2_status is {ITEM.VALUE}'
+                  priority: HIGH
+                  manual_close: 'YES'
+            - uuid: 8c168aecbf34470293c9ae6d310d2011
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Canister {#CANISTER.ID} SES_status'
+              type: DEPENDENT
+              key: 'storwize.enclosure.canister.sesstatus[{#ENCLOSURE.ID},{#CANISTER.ID}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: 'Indicates the Small Computer System Interface (SCSI) status of the connection between the device and the canister. The values are online and offline.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.canister_id==''{#CANISTER.ID}'')].SES_status.first()'
+              master_item:
+                key: storwize.get.enclosurecanister.raw
+              tags:
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+            - uuid: 1bc38ef4fa704ebfa586e1af10af6096
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Canister {#CANISTER.ID} Status'
+              type: DEPENDENT
+              key: 'storwize.enclosure.canister.status[{#ENCLOSURE.ID},{#CANISTER.ID}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: |
+                Indicates the status of the canister. The values are:
+
+                * online indicates that the canister is present and working normally.
+                * degraded indicates that the canister is present but not working normally
+                * offline indicates that the canister could not be detected.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.canister_id==''{#CANISTER.ID}'')].status.first()'
+              master_item:
+                key: storwize.get.enclosurecanister.raw
+              tags:
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+              trigger_prototypes:
+                - uuid: a65ab63a79564ac4a372b4587e51926a
+                  expression: 'find(/IBM Storwize by SSH/storwize.enclosure.canister.status[{#ENCLOSURE.ID},{#CANISTER.ID}],,"like","online")=0'
+                  name: 'Storwize: Enclosure {#ENCLOSURE.ID} Canister {#CANISTER.ID} Status is {ITEM.VALUE}'
+                  priority: HIGH
+                  manual_close: 'YES'
+            - uuid: 6654d69968674c608240076f156ff8e8
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Canister {#CANISTER.ID} Temperature'
+              type: DEPENDENT
+              key: 'storwize.enclosure.canister.temp[{#ENCLOSURE.ID},{#CANISTER.ID}]'
+              delay: '0'
+              trends: '0'
+              units: C
+              description: 'Indicates the temperature of the canister in degrees centigrade.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.canister_id==''{#CANISTER.ID}'')].temperature.first()'
+              master_item:
+                key: storwize.get.enclosurecanister.raw
+              tags:
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+          master_item:
+            key: storwize.get.enclosurecanister.raw
+          lld_macro_paths:
+            - lld_macro: '{#CANISTER.ID}'
+              path: $.canister_id
+            - lld_macro: '{#ENCLOSURE.ID}'
+              path: $.enclosure_id
+        - uuid: c0341fd566ab4bf8bf7c026d9458ec90
+          name: 'Storwize: Enclosure discovery'
+          type: DEPENDENT
+          key: storwize.enclosure.discovery
+          delay: '0'
+          item_prototypes:
+            - uuid: 208949c8983141a2b19990080db24cb7
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Online Canisters'
+              type: DEPENDENT
+              key: 'storwize.enclosure.canisters.on[{#ENCLOSURE.SN}]'
+              delay: '0'
+              trends: '0'
+              description: 'Indicates the number of canisters contained in this enclosure that are online.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.serial_number==''{#ENCLOSURE.SN}'')].online_canisters.first()'
+              master_item:
+                key: storwize.get.enclosure.raw
+              tags:
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+            - uuid: 058ee27c56c141b6bdca52244c873cbd
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Total Canisters'
+              type: DEPENDENT
+              key: 'storwize.enclosure.canisters[{#ENCLOSURE.SN}]'
+              delay: '0'
+              trends: '0'
+              description: 'Indicates the maximum number of canisters for this enclosure type.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.serial_number==''{#ENCLOSURE.SN}'')].total_canisters.first()'
+              master_item:
+                key: storwize.get.enclosure.raw
+              tags:
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+            - uuid: 136209fb9dfd406b9c38dbdb3d722691
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Online FAN'
+              type: DEPENDENT
+              key: 'storwize.enclosure.fan.on[{#ENCLOSURE.SN}]'
+              delay: '0'
+              trends: '0'
+              description: 'Indicates the number of FAN contained in this enclosure that are online.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.serial_number==''{#ENCLOSURE.SN}'')].online_fan_modules.first()'
+              master_item:
+                key: storwize.get.enclosure.raw
+              tags:
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+            - uuid: a326c23bef4f41ecb3a6c8edf03d39d3
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Total FAN'
+              type: DEPENDENT
+              key: 'storwize.enclosure.fan[{#ENCLOSURE.SN}]'
+              delay: '0'
+              trends: '0'
+              description: 'Indicates the number of fan units in this enclosure.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.serial_number==''{#ENCLOSURE.SN}'')].total_fan_modules.first()'
+              master_item:
+                key: storwize.get.enclosure.raw
+              tags:
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+            - uuid: 71933bad23b54c6093d85f024c097f65
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Online PSU'
+              type: DEPENDENT
+              key: 'storwize.enclosure.psu.on[{#ENCLOSURE.SN}]'
+              delay: '0'
+              trends: '0'
+              description: 'Indicates the number of power-supply units (PSUs) contained in this enclosure that are online.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.serial_number==''{#ENCLOSURE.SN}'')].online_PSUs.first()'
+              master_item:
+                key: storwize.get.enclosure.raw
+              tags:
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+            - uuid: 693e1e7c28024ffc9adc280c839aa172
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Total PSU'
+              type: DEPENDENT
+              key: 'storwize.enclosure.psu[{#ENCLOSURE.SN}]'
+              delay: '0'
+              trends: '0'
+              description: 'Indicates the number of power and cooling units in this enclosure.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.serial_number==''{#ENCLOSURE.SN}'')].total_PSUs.first()'
+              master_item:
+                key: storwize.get.enclosure.raw
+              tags:
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+            - uuid: de8c783b67eb46e68711cd5f6f9f67b4
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Status'
+              type: DEPENDENT
+              key: 'storwize.enclosure.status[{#ENCLOSURE.SN}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: |
+                Indicates whether an enclosure is visible to the SAS network:
+                * online if a managed or unmanaged enclosure is visible.
+                * offline if a managed enclosure is not visible, and other fields hold their last known values.
+                * degraded if an enclosure is visible, but not down both strands.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.serial_number==''{#ENCLOSURE.SN}'')].status.first()'
+              master_item:
+                key: storwize.get.enclosure.raw
+              tags:
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+              trigger_prototypes:
+                - uuid: c311dfb27da6412584b88a627ba62f2b
+                  expression: 'find(/IBM Storwize by SSH/storwize.enclosure.status[{#ENCLOSURE.SN}],,"like","online")=0'
+                  name: 'Storwize: Enclosure {#ENCLOSURE.ID} Status is {ITEM.VALUE}'
+                  priority: HIGH
+                  manual_close: 'YES'
+            - uuid: 6c9ce12b624d4e5894aa8a04db69296b
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Temp Ambiente'
+              type: DEPENDENT
+              key: 'storwize.enclosure.temp.ambiente[{#ENCLOSURE.SN}]'
+              delay: '0'
+              trends: '0'
+              units: C
+              description: 'Indicates the current ambient air temperature near the enclosure. The temperature value is given in degrees centigrade and is a number from -20 to 235.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.serial_number==''{#ENCLOSURE.SN}'')].ambient_temperature.first()'
+              master_item:
+                key: storwize.get.enclosure.raw
+              tags:
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+          trigger_prototypes:
+            - uuid: bca70d2ebb944f66a3824ecf1765a13e
+              expression: 'last(/IBM Storwize by SSH/storwize.enclosure.canisters.on[{#ENCLOSURE.SN}])<last(/IBM Storwize by SSH/storwize.enclosure.canisters[{#ENCLOSURE.SN}])'
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Canister is offline'
+              priority: HIGH
+              manual_close: 'YES'
+            - uuid: f94cb50c5e384abf84a4c0bda224199e
+              expression: 'last(/IBM Storwize by SSH/storwize.enclosure.fan.on[{#ENCLOSURE.SN}])<last(/IBM Storwize by SSH/storwize.enclosure.fan[{#ENCLOSURE.SN}])'
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} FAN is offline'
+              priority: HIGH
+              manual_close: 'YES'
+            - uuid: 6a8ab43cd78d44689e88c846cc895e75
+              expression: 'last(/IBM Storwize by SSH/storwize.enclosure.psu.on[{#ENCLOSURE.SN}])<last(/IBM Storwize by SSH/storwize.enclosure.psu[{#ENCLOSURE.SN}])'
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} PSU is offline'
+              priority: HIGH
+              manual_close: 'YES'
+          master_item:
+            key: storwize.get.enclosure.raw
+          lld_macro_paths:
+            - lld_macro: '{#ENCLOSURE.ID}'
+              path: $.id
+            - lld_macro: '{#ENCLOSURE.SN}'
+              path: $.serial_number
+        - uuid: 6e1019745ae24016ba7e8225296ef22e
+          name: 'Storwize: Enclosure PSU discovery'
+          type: DEPENDENT
+          key: storwize.enclosure.psu.discovery
+          delay: '0'
+          item_prototypes:
+            - uuid: 63abf15b6e6d4977847f5eb1b4c93dad
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} PSU {#PSU.ID} Status'
+              type: DEPENDENT
+              key: 'storwize.enclosure.psu.status[{#ENCLOSURE.ID},{#PSU.ID}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: |
+                Indicates the status of the power and cooling unit in the enclosure:
+                * online indicates that a PSU is present and  working normally.
+                * offline indicates that a PSU cannot be detected.
+                * degraded indicates that a PSU is present but not working normally.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.PSU_id==''{#PSU.ID}'' && @.enclosure_id==''{#ENCLOSURE.ID}'')].status.first()'
+              master_item:
+                key: storwize.get.enclosurepsu.raw
+              tags:
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
+              trigger_prototypes:
+                - uuid: f189ba1605104ba5bdacb6fdc82744d3
+                  expression: 'find(/IBM Storwize by SSH/storwize.enclosure.psu.status[{#ENCLOSURE.ID},{#PSU.ID}],,"like","online")=0'
+                  name: 'Storwize: Enclosure {#ENCLOSURE.ID} PSU {#PSU.ID} Status is {ITEM.VALUE}'
+                  manual_close: 'YES'
+          master_item:
+            key: storwize.get.enclosurepsu.raw
+          lld_macro_paths:
+            - lld_macro: '{#ENCLOSURE.ID}'
+              path: $.enclosure_id
+            - lld_macro: '{#PSU.ID}'
+              path: $.PSU_id
+        - uuid: 40e66c4f41934c1eb67315cfa9717b93
+          name: 'Storwize: Host discovery'
+          type: DEPENDENT
+          key: storwize.host.discovery
+          delay: '0'
+          item_prototypes:
+            - uuid: d3cc1e30655e47bdb09d80e558ad35d6
+              name: 'Storwize: Host {#HOST.NAME} Status'
+              type: DEPENDENT
+              key: 'storwize.host.status[{#HOST.NAME}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: 'Indicates whether the host is online or offline.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.name==''{#HOST.NAME}'')].status.first()'
+              master_item:
+                key: storwize.get.host.raw
+              tags:
+                - tag: component
+                  value: status
+                - tag: host_id
+                  value: '{#HOST.ID}'
+                - tag: host_name
+                  value: '{#HOST.NAME}'
+              trigger_prototypes:
+                - uuid: 8ba646f71f744de5b4ef38b394fc231a
+                  expression: 'find(/IBM Storwize by SSH/storwize.host.status[{#HOST.NAME}],,"like","online")=0'
+                  name: 'Storwize: Host {#HOST.NAME} Status is {ITEM.VALUE}'
+                  priority: HIGH
+                  manual_close: 'YES'
+          master_item:
+            key: storwize.get.host.raw
+          lld_macro_paths:
+            - lld_macro: '{#HOST.ID}'
+              path: $.id
+            - lld_macro: '{#HOST.NAME}'
+              path: $.name
+        - uuid: b1d3e657672347c69ddcc1859525da34
+          name: 'Storwize: mDisk discovery'
+          type: DEPENDENT
+          key: storwize.mdisk.discovery
+          delay: '0'
+          item_prototypes:
+            - uuid: b86abedc74784b60974b964d89d1803f
+              name: 'Storwize: mDisk {#MDISK.NAME} Allocated Capacity'
+              type: DEPENDENT
+              key: 'storwize.mdisk.allocated.capacity[{#MDISK.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: B
+              description: 'The amount of logical capacity that is allocated (by a pool) from this MDisk for volume data and quorum.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.name==''{#MDISK.NAME}'')].allocated_capacity.first()'
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
+
+                      if (!matches) {
+                          throw "Formato inválido: " + value;
+                      }
+
+                      var number = matches[1].replace(',', '.');
+                      var unit = matches[2].toUpperCase();
+
+                      var size = parseFloat(number);
+                      if (isNaN(size)) {
+                          throw "Número inválido: " + number;
+                      }
+
+                      var multipliers = {
+                          B: 1,
+                          KB: 1e3,
+                          MB: 1e6,
+                          GB: 1e9,
+                          TB: 1e12,
+                          PB: 1e15,
+                          KIB: 1024,
+                          MIB: 1024 ** 2,
+                          GIB: 1024 ** 3,
+                          TIB: 1024 ** 4,
+                          PIB: 1024 ** 5
+                      };
+
+                      if (!(unit in multipliers)) {
+                          throw "Unidade desconhecida: " + unit;
+                      }
+
+                      return size * multipliers[unit];
+              master_item:
+                key: storwize.get.mdisk.raw
+              tags:
+                - tag: mdisk_id
+                  value: '{#MDISK.ID}'
+                - tag: mdisk_name
+                  value: '{#MDISK.NAME}'
+            - uuid: 97eb56df1ad34ea0930df59ffff68534
+              name: 'Storwize: mDisk {#MDISK.NAME} Capacity'
+              type: DEPENDENT
+              key: 'storwize.mdisk.capacity[{#MDISK.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: B
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.name==''{#MDISK.NAME}'')].capacity.first()'
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
+
+                      if (!matches) {
+                          throw "Formato inválido: " + value;
+                      }
+
+                      var number = matches[1].replace(',', '.');
+                      var unit = matches[2].toUpperCase();
+
+                      var size = parseFloat(number);
+                      if (isNaN(size)) {
+                          throw "Número inválido: " + number;
+                      }
+
+                      var multipliers = {
+                          B: 1,
+                          KB: 1e3,
+                          MB: 1e6,
+                          GB: 1e9,
+                          TB: 1e12,
+                          PB: 1e15,
+                          KIB: 1024,
+                          MIB: 1024 ** 2,
+                          GIB: 1024 ** 3,
+                          TIB: 1024 ** 4,
+                          PIB: 1024 ** 5
+                      };
+
+                      if (!(unit in multipliers)) {
+                          throw "Unidade desconhecida: " + unit;
+                      }
+
+                      return size * multipliers[unit];
+              master_item:
+                key: storwize.get.mdisk.raw
+              tags:
+                - tag: mdisk_id
+                  value: '{#MDISK.ID}'
+                - tag: mdisk_name
+                  value: '{#MDISK.NAME}'
+            - uuid: aaaa8c91a2a1428f875feba635f8b124
+              name: 'Storwize: mDisk {#MDISK.NAME} Physical Capacity'
+              type: DEPENDENT
+              key: 'storwize.mdisk.physical.capacity[{#MDISK.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: B
+              description: 'Indicates the total physical storage capacity of the provisioning group that contains this MDisk. If this MDisk is not over-provisioned the logical capacity is displayed here. The value must be a number (indicated in units) that is rounded to two decimal places.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.name==''{#MDISK.NAME}'')].physical_capacity.first()'
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
+
+                      if (!matches) {
+                          throw "Formato inválido: " + value;
+                      }
+
+                      var number = matches[1].replace(',', '.');
+                      var unit = matches[2].toUpperCase();
+
+                      var size = parseFloat(number);
+                      if (isNaN(size)) {
+                          throw "Número inválido: " + number;
+                      }
+
+                      var multipliers = {
+                          B: 1,
+                          KB: 1e3,
+                          MB: 1e6,
+                          GB: 1e9,
+                          TB: 1e12,
+                          PB: 1e15,
+                          KIB: 1024,
+                          MIB: 1024 ** 2,
+                          GIB: 1024 ** 3,
+                          TIB: 1024 ** 4,
+                          PIB: 1024 ** 5
+                      };
+
+                      if (!(unit in multipliers)) {
+                          throw "Unidade desconhecida: " + unit;
+                      }
+
+                      return size * multipliers[unit];
+              master_item:
+                key: storwize.get.mdisk.raw
+              tags:
+                - tag: mdisk_id
+                  value: '{#MDISK.ID}'
+                - tag: mdisk_name
+                  value: '{#MDISK.NAME}'
+            - uuid: ed311b8c57854234beef46c2d3f9a095
+              name: 'Storwize: mDisk {#MDISK.NAME} Physical Free Capacity'
+              type: DEPENDENT
+              key: 'storwize.mdisk.physical.free.capacity[{#MDISK.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: B
+              description: 'Indicates the amount of formatted available physical space in the provisioning group that contains this MDisk. If this MDisk is not over-provisioned the remaining logical capacity is displayed instead. The value must be a number (indicated in units) that is rounded to two decimal places.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.name==''{#MDISK.NAME}'')].physical_free_capacity.first()'
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
+
+                      if (!matches) {
+                          throw "Formato inválido: " + value;
+                      }
+
+                      var number = matches[1].replace(',', '.');
+                      var unit = matches[2].toUpperCase();
+
+                      var size = parseFloat(number);
+                      if (isNaN(size)) {
+                          throw "Número inválido: " + number;
+                      }
+
+                      var multipliers = {
+                          B: 1,
+                          KB: 1e3,
+                          MB: 1e6,
+                          GB: 1e9,
+                          TB: 1e12,
+                          PB: 1e15,
+                          KIB: 1024,
+                          MIB: 1024 ** 2,
+                          GIB: 1024 ** 3,
+                          TIB: 1024 ** 4,
+                          PIB: 1024 ** 5
+                      };
+
+                      if (!(unit in multipliers)) {
+                          throw "Unidade desconhecida: " + unit;
+                      }
+
+                      return size * multipliers[unit];
+              master_item:
+                key: storwize.get.mdisk.raw
+              tags:
+                - tag: mdisk_id
+                  value: '{#MDISK.ID}'
+                - tag: mdisk_name
+                  value: '{#MDISK.NAME}'
+            - uuid: da6a3127e3f84ce08cdcef0befde9976
+              name: 'Storwize: mDisk {#MDISK.NAME} Status'
+              type: DEPENDENT
+              key: 'storwize.mdisk.status[{#MDISK.NAME}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: |
+                * online
+                * offline
+                * excluded
+                * degraded_paths
+                * degraded_ports
+                * degraded (This value applies only to internal MDisks.)
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.name==''{#MDISK.NAME}'')].status.first()'
+              master_item:
+                key: storwize.get.mdisk.raw
+              tags:
+                - tag: mdisk_id
+                  value: '{#MDISK.ID}'
+                - tag: mdisk_name
+                  value: '{#MDISK.NAME}'
+              trigger_prototypes:
+                - uuid: c06f625ddef04cd1adf1e20a5e76234b
+                  expression: 'find(/IBM Storwize by SSH/storwize.mdisk.status[{#MDISK.NAME}],,"like","online")=0'
+                  name: 'Storwize: mDisk {#MDISK.NAME} Status is {ITEM.VALUE}'
+                  priority: HIGH
+                  manual_close: 'YES'
+          trigger_prototypes:
+            - uuid: c4eb46125a1947bdb4b3e3960aeca0c8
+              expression: '(last(/IBM Storwize by SSH/storwize.mdisk.physical.free.capacity[{#MDISK.NAME}])/last(/IBM Storwize by SSH/storwize.mdisk.physical.capacity[{#MDISK.NAME}])*100)<=10'
+              name: 'Storwize: mDisk {#MDISK.NAME} Low Physical Free Capacity'
+              priority: HIGH
+              manual_close: 'YES'
+          master_item:
+            key: storwize.get.mdisk.raw
+          lld_macro_paths:
+            - lld_macro: '{#MDISK.ID}'
+              path: $.id
+            - lld_macro: '{#MDISK.NAME}'
+              path: $.name
+        - uuid: 8afa30a9c78f4b31b441f4392e94d909
+          name: 'Storwize: Node canister discovery'
+          type: DEPENDENT
+          key: storwize.node.canister.discovery
+          delay: '0'
+          item_prototypes:
+            - uuid: e420fb011b8a492f912f33ac92735c19
+              name: 'Storwize: Node Canister {#NODE.NAME} Status'
+              type: DEPENDENT
+              key: 'storwize.node.canister.status[{#NODE.NAME}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: |
+                Indicates the status. The values are:
+                * offline
+                * service
+                * flushing
+                * pending
+                * online
+                * adding
+                * deleting
+                * spare
+                * online_spare
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.name==''{#NODE.NAME}'')].status.first()'
+              master_item:
+                key: storwize.get.nodecanister.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+              trigger_prototypes:
+                - uuid: f65172071ac0447fa126ef1aa0635544
+                  expression: 'find(/IBM Storwize by SSH/storwize.node.canister.status[{#NODE.NAME}],,"like","online")=0'
+                  name: 'Storwize: Node Canister {#NODE.NAME} Status is {ITEM.VALUE}'
+                  priority: HIGH
+                  manual_close: 'YES'
+          master_item:
+            key: storwize.get.nodecanister.raw
+          lld_macro_paths:
+            - lld_macro: '{#NODE.ID}'
+              path: $.id
+            - lld_macro: '{#NODE.NAME}'
+              path: $.name
+        - uuid: 423211df78624554a53779465c2dc645
+          name: 'Storwize: Port fc discovery'
+          type: DEPENDENT
+          key: storwize.port.fc.discovery
+          delay: '0'
+          item_prototypes:
+            - uuid: 53e74cd4fad84a4a96b75360f7de08ed
+              name: 'Storwize: Node {#NODE.NAME} Port fc {#FC.PORT.ID} Status'
+              type: DEPENDENT
+              key: 'storwize.node.portfc.status[{#NODE.NAME},{#PORT.ID}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: |
+                Indicates whether the port is configured to a device of Fibre Channel (FC) port. The values are:
+                * active
+                * inactive_configured
+                * inactive_unconfigured .
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.id==''{#PORT.ID}'')].status.first()'
+              master_item:
+                key: storwize.get.portfc.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+              trigger_prototypes:
+                - uuid: 2cde1e0d5cd041b4886caff735080289
+                  expression: 'find(/IBM Storwize by SSH/storwize.node.portfc.status[{#NODE.NAME},{#PORT.ID}],,"like","online")=0'
+                  name: 'Storwize: Node {#NODE.NAME} Port fc {#FC.PORT.ID} Status is {ITEM.VALUE}'
+                  priority: HIGH
+                  manual_close: 'YES'
+            - uuid: d2bcb92a519943ce93e91a540c7abdb3
+              name: 'Storwize: Node {#NODE.NAME} Port fc {#FC.PORT.ID} Switch'
+              type: DEPENDENT
+              key: 'storwize.node.portfc.switch[{#NODE.NAME},{#PORT.ID}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: 'Indicates the WWPN of the device that was most recently attached to the port. The value must be in 16-character hexadecimal format, or all zeroes if the port has never been active.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.id==''{#PORT.ID}'')].switch_WWPN.first()'
+              master_item:
+                key: storwize.get.portfc.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+          master_item:
+            key: storwize.get.portfc.raw
+          lld_macro_paths:
+            - lld_macro: '{#FC.PORT.ID}'
+              path: $.fc_io_port_id
+            - lld_macro: '{#NODE.ID}'
+              path: $.node_id
+            - lld_macro: '{#NODE.NAME}'
+              path: $.node_name
+            - lld_macro: '{#PORT.ID}'
+              path: $.id
+        - uuid: 21a3c6e1f78546c8b7f127bc55630901
+          name: 'Storwize: Port SAS discovery'
+          type: DEPENDENT
+          key: storwize.port.sas.discovery
+          delay: '0'
+          item_prototypes:
+            - uuid: 50ce1856551640a9ae9e980ec5f5af20
+              name: 'Storwize: Node {#NODE.NAME} Port SAS {#SAS.PORT.ID} Status'
+              type: DEPENDENT
+              key: 'storwize.node.portsas.status[{#NODE.NAME},{#PORT.ID}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: |
+                Indicates the status of the port (numeric string).
+                The values can be:
+                 * online if the port is functioning
+                 * offline if the port is not functioning
+                 * offline_unconfigured if not functioning but not configured by the user
+                 * degraded if one or more ports are not functioning or have a lower speed than others
+                 * excluded if excluded by the user or system
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.id==''{#PORT.ID}'')].status.first()'
+              master_item:
+                key: storwize.get.portsas.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+              trigger_prototypes:
+                - uuid: b945f55c46604b8c8ef082c35ad11ecd
+                  expression: 'find(/IBM Storwize by SSH/storwize.node.portsas.status[{#NODE.NAME},{#PORT.ID}],,"like","online")=0'
+                  name: 'Storwize: Node {#NODE.NAME} Port SAS {#SAS.PORT.ID} Status is {ITEM.VALUE}'
+                  priority: HIGH
+                  manual_close: 'YES'
+            - uuid: ba01ed61d48e48b594d6fe2cd3e1f192
+              name: 'Storwize: Node {#NODE.NAME} Port SAS {#SAS.PORT.ID} Switch'
+              type: DEPENDENT
+              key: 'storwize.node.portsas.switch[{#NODE.NAME},{#PORT.ID}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: 'Indicates the worldwide port name (WWPN) for the I/O port (16-character hexadecimal string).'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.id==''{#PORT.ID}'')].switch_WWPN.first()'
+              master_item:
+                key: storwize.get.portsas.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+          master_item:
+            key: storwize.get.portsas.raw
+          lld_macro_paths:
+            - lld_macro: '{#NODE.ID}'
+              path: $.node_id
+            - lld_macro: '{#NODE.NAME}'
+              path: $.node_name
+            - lld_macro: '{#PORT.ID}'
+              path: $.id
+            - lld_macro: '{#SAS.PORT.ID}'
+              path: $.port_id
+        - uuid: efcc9de284ba4d9c8c877b6354ce3e62
+          name: 'Storwize: Quorum discovery'
+          type: DEPENDENT
+          key: storwize.quorum.discovery
+          delay: '0'
+          item_prototypes:
+            - uuid: 7ce97e5a68974ded87f12743e46e49b9
+              name: 'Storwize: Quorum ID: {#QUORUM.ID} Index: {#QUORUM.INDEX} Status'
+              type: DEPENDENT
+              key: 'storwize.quorum.status[{#QUORUM.ID}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: 'Indicates the quorum device status.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.id==''{#QUORUM.ID}'')].status.first()'
+              master_item:
+                key: storwize.get.quorum.raw
+              tags:
+                - tag: quorum_id
+                  value: '{#QUORUM.ID}'
+              trigger_prototypes:
+                - uuid: a2b64ac4b35b4d499469ce8ec22fb308
+                  expression: 'find(/IBM Storwize by SSH/storwize.quorum.status[{#QUORUM.ID}],,"like","online")=0'
+                  name: 'Storwize: Quorum ID: {#QUORUM.ID} Index: {#QUORUM.INDEX} Status is {ITEM.VALUE}'
+                  priority: HIGH
+                  manual_close: 'YES'
+          master_item:
+            key: storwize.get.quorum.raw
+          lld_macro_paths:
+            - lld_macro: '{#QUORUM.ID}'
+              path: $.id
+            - lld_macro: '{#QUORUM.INDEX}'
+              path: $.quorum_index
+        - uuid: fb6fe641a0ae4010a63a2db49ba1f352
+          name: 'Storwize: vDisk discovery'
+          type: DEPENDENT
+          key: storwize.vdisk.discovery
+          delay: '0'
+          item_prototypes:
+            - uuid: fd3cd5783bd948819faaa908a8bea682
+              name: 'Storwize: vDisk {#VDISK.NAME} Capacity'
+              type: DEPENDENT
+              key: 'storwize.vdisk.capacity[{#VDISK.NAME}]'
+              delay: '0'
+              units: B
+              description: 'Indicates the provisioned capacity of the volume that is the size of the volume as seen by the host.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.name==''{#VDISK.NAME}'')].capacity.first()'
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
+
+                      if (!matches) {
+                          throw "Formato inválido: " + value;
+                      }
+
+                      var number = matches[1].replace(',', '.');
+                      var unit = matches[2].toUpperCase();
+
+                      var size = parseFloat(number);
+                      if (isNaN(size)) {
+                          throw "Número inválido: " + number;
+                      }
+
+                      var multipliers = {
+                          B: 1,
+                          KB: 1e3,
+                          MB: 1e6,
+                          GB: 1e9,
+                          TB: 1e12,
+                          PB: 1e15,
+                          KIB: 1024,
+                          MIB: 1024 ** 2,
+                          GIB: 1024 ** 3,
+                          TIB: 1024 ** 4,
+                          PIB: 1024 ** 5
+                      };
+
+                      if (!(unit in multipliers)) {
+                          throw "Unidade desconhecida: " + unit;
+                      }
+
+                      return size * multipliers[unit];
+              master_item:
+                key: storwize.get.vdisk.raw
+              tags:
+                - tag: vdisk.id
+                  value: '{#VDISK.ID}'
+                - tag: vdisk.name
+                  value: '{#VDISK.NAME}'
+                - tag: vdisk_grp
+                  value: '{#VDISK.GRP}'
+            - uuid: af554975260b45dca3e01ccf3ca65b92
+              name: 'Storwize: vDisk {#VDISK.NAME} Copy ID'
+              type: DEPENDENT
+              key: 'storwize.vdisk.copyid[{#VDISK.NAME}]'
+              delay: '0'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.name==''{#VDISK.NAME}'')].copy_id.first()'
+              master_item:
+                key: 'ssh.run[get.storwize.vdisk]'
+              tags:
+                - tag: vdisk.id
+                  value: '{#VDISK.ID}'
+                - tag: vdisk.name
+                  value: '{#VDISK.NAME}'
+                - tag: vdisk_grp
+                  value: '{#VDISK.GRP}'
+            - uuid: ee9fec2147424bd99f669655c53575d2
+              name: 'Storwize: vDisk {#VDISK.NAME} Free Capacity'
+              type: DEPENDENT
+              key: 'storwize.vdisk.free.capacity[{#VDISK.NAME}]'
+              delay: '0'
+              units: B
+              description: 'Indicates the difference between the real_capacity and used_capacity values. This field is blank for storage pools that are not thin-provisioned or compressed volume copies in a data reduction pool.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.name==''{#VDISK.NAME}'')].free_capacity.first()'
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
+
+                      if (!matches) {
+                          throw "Formato inválido: " + value;
+                      }
+
+                      var number = matches[1].replace(',', '.');
+                      var unit = matches[2].toUpperCase();
+
+                      var size = parseFloat(number);
+                      if (isNaN(size)) {
+                          throw "Número inválido: " + number;
+                      }
+
+                      var multipliers = {
+                          B: 1,
+                          KB: 1e3,
+                          MB: 1e6,
+                          GB: 1e9,
+                          TB: 1e12,
+                          PB: 1e15,
+                          KIB: 1024,
+                          MIB: 1024 ** 2,
+                          GIB: 1024 ** 3,
+                          TIB: 1024 ** 4,
+                          PIB: 1024 ** 5
+                      };
+
+                      if (!(unit in multipliers)) {
+                          throw "Unidade desconhecida: " + unit;
+                      }
+
+                      return size * multipliers[unit];
+              master_item:
+                key: 'ssh.run[get.storwize.vdisk]'
+              tags:
+                - tag: vdisk.id
+                  value: '{#VDISK.ID}'
+                - tag: vdisk.name
+                  value: '{#VDISK.NAME}'
+                - tag: vdisk_grp
+                  value: '{#VDISK.GRP}'
+            - uuid: c6cadd977bcd4eee9d02e8a72ab55a92
+              name: 'Storwize: vDisk {#VDISK.NAME} grp name'
+              type: DEPENDENT
+              key: 'storwize.vdisk.grp.name[{#VDISK.NAME}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: 'Indicates the name of the storage pool that the volume belongs to. If the volume has more than one copy, these fields display many.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.name==''{#VDISK.NAME}'')].mdisk_grp_name.first()'
+              master_item:
+                key: 'ssh.run[get.storwize.vdisk]'
+              tags:
+                - tag: vdisk.id
+                  value: '{#VDISK.ID}'
+                - tag: vdisk.name
+                  value: '{#VDISK.NAME}'
+                - tag: vdisk_grp
+                  value: '{#VDISK.GRP}'
+            - uuid: 0ea474556617481d88c9df4ccd2a11c7
+              name: 'Storwize: vDisk {#VDISK.NAME} Real Capacity'
+              type: DEPENDENT
+              key: 'storwize.vdisk.real.capacity[{#VDISK.NAME}]'
+              delay: '0'
+              units: B
+              description: 'Indicates the amount of physical storage that is allocated from a storage pool to this volume copy. If the volume copy is not thin-provisioned, the value is the same as the volume capacity. If the volume copy is thin-provisioned, the value can be different. This field is blank for volume copies that are thin-provisioned or compressed volume copies in a data reduction pool.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.name==''{#VDISK.NAME}'')].real_capacity.first()'
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
+
+                      if (!matches) {
+                          throw "Formato inválido: " + value;
+                      }
+
+                      var number = matches[1].replace(',', '.');
+                      var unit = matches[2].toUpperCase();
+
+                      var size = parseFloat(number);
+                      if (isNaN(size)) {
+                          throw "Número inválido: " + number;
+                      }
+
+                      var multipliers = {
+                          B: 1,
+                          KB: 1e3,
+                          MB: 1e6,
+                          GB: 1e9,
+                          TB: 1e12,
+                          PB: 1e15,
+                          KIB: 1024,
+                          MIB: 1024 ** 2,
+                          GIB: 1024 ** 3,
+                          TIB: 1024 ** 4,
+                          PIB: 1024 ** 5
+                      };
+
+                      if (!(unit in multipliers)) {
+                          throw "Unidade desconhecida: " + unit;
+                      }
+
+                      return size * multipliers[unit];
+              master_item:
+                key: 'ssh.run[get.storwize.vdisk]'
+              tags:
+                - tag: vdisk.id
+                  value: '{#VDISK.ID}'
+                - tag: vdisk.name
+                  value: '{#VDISK.NAME}'
+                - tag: vdisk_grp
+                  value: '{#VDISK.GRP}'
+            - uuid: aa40ae43d5754e4489da798bdc446e2e
+              name: 'Storwize: vDisk {#VDISK.NAME} Status'
+              type: DEPENDENT
+              key: 'storwize.vdisk.status[{#VDISK.NAME}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: |
+                Indicates the status. The value can be online, offline, degraded, or deleting.
+
+                For online HyperSwap volumes the scope of offline copy is ncluded with the status information. For offline volumes the auxiliary copy is included with the status information even if the copy associated with that is online.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.name==''{#VDISK.NAME}'')].status.first()'
+              master_item:
+                key: storwize.get.vdisk.raw
+              tags:
+                - tag: vdisk.id
+                  value: '{#VDISK.ID}'
+                - tag: vdisk.name
+                  value: '{#VDISK.NAME}'
+                - tag: vdisk_grp
+                  value: '{#VDISK.GRP}'
+              trigger_prototypes:
+                - uuid: 221689fc56704dc8addd03b4fd7ab9dc
+                  expression: 'find(/IBM Storwize by SSH/storwize.vdisk.status[{#VDISK.NAME}],,"like","online")=0'
+                  name: 'Storwize: vDisk {#VDISK.NAME} Status is {ITEM.VALUE}'
+                  priority: HIGH
+                  manual_close: 'YES'
+            - uuid: 482b72a5234041248346f039fda1b293
+              name: 'Storwize: vDisk {#VDISK.NAME} Sync Status'
+              type: DEPENDENT
+              key: 'storwize.vdisk.sync[{#VDISK.NAME}]'
+              delay: '0'
+              value_type: TEXT
+              trends: '0'
+              description: 'Indicates whether the volume copy is synchronized.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.name==''{#VDISK.NAME}'')].sync.first()'
+              master_item:
+                key: 'ssh.run[get.storwize.vdisk]'
+              tags:
+                - tag: vdisk.id
+                  value: '{#VDISK.ID}'
+                - tag: vdisk.name
+                  value: '{#VDISK.NAME}'
+                - tag: vdisk_grp
+                  value: '{#VDISK.GRP}'
+            - uuid: db9d06f6535d4e6aba1a2ce2cadbae87
+              name: 'Storwize: vDisk {#VDISK.NAME} Used Capacity'
+              type: DEPENDENT
+              key: 'storwize.vdisk.used.capacity[{#VDISK.NAME}]'
+              delay: '0'
+              units: B
+              description: 'Indicates the portion of real_capacity that is being used to store data. For non-thin-provisioned copies, this value is the same as the volume capacity. If the volume copy is thin-provisioned, the value increases from zero to the real_capacity value as more of the volume is written to. This field is blank for volume copies that are thin-provisioned or compressed volume copies in a data reduction pool.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?(@.name==''{#VDISK.NAME}'')].used_capacity.first()'
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
+
+                      if (!matches) {
+                          throw "Formato inválido: " + value;
+                      }
+
+                      var number = matches[1].replace(',', '.');
+                      var unit = matches[2].toUpperCase();
+
+                      var size = parseFloat(number);
+                      if (isNaN(size)) {
+                          throw "Número inválido: " + number;
+                      }
+
+                      var multipliers = {
+                          B: 1,
+                          KB: 1e3,
+                          MB: 1e6,
+                          GB: 1e9,
+                          TB: 1e12,
+                          PB: 1e15,
+                          KIB: 1024,
+                          MIB: 1024 ** 2,
+                          GIB: 1024 ** 3,
+                          TIB: 1024 ** 4,
+                          PIB: 1024 ** 5
+                      };
+
+                      if (!(unit in multipliers)) {
+                          throw "Unidade desconhecida: " + unit;
+                      }
+
+                      return size * multipliers[unit];
+              master_item:
+                key: 'ssh.run[get.storwize.vdisk]'
+              tags:
+                - tag: vdisk.id
+                  value: '{#VDISK.ID}'
+                - tag: vdisk.name
+                  value: '{#VDISK.NAME}'
+                - tag: vdisk_grp
+                  value: '{#VDISK.GRP}'
+          trigger_prototypes:
+            - uuid: e1ef2651c25c432ba90610e69e96c949
+              expression: '((last(/IBM Storwize by SSH/storwize.vdisk.free.capacity[{#VDISK.NAME}])/last(/IBM Storwize by SSH/storwize.vdisk.capacity[{#VDISK.NAME}]))*100)<=10'
+              name: 'Storwize: vDisk {#VDISK.NAME} Free Capacity is low'
+              priority: HIGH
+              manual_close: 'YES'
+          master_item:
+            key: storwize.get.vdisk.raw
+          lld_macro_paths:
+            - lld_macro: '{#VDISK.GRP}'
+              path: $.mdisk_grp_name
+            - lld_macro: '{#VDISK.ID}'
+              path: $.id
+            - lld_macro: '{#VDISK.NAME}'
+              path: $.name
+      tags:
+        - tag: Component
+          value: storwize
+        - tag: ComponentType
+          value: Storage
+      macros:
+        - macro: '{$IBM.SW.SSH.PASSWORD}'
+        - macro: '{$IBM.SW.SSH.USER}'
