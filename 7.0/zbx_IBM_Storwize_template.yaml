@@ -9,11 +9,13 @@ zabbix_export:
       name: 'IBM Storwize by SSH'
       description: |
         Template para monitorar o IBM Storwize (v3700, v5000, v7000, SAN Volume Controller)..
-
+        
         O template foi testado na versão Storewise v7000.
-
+        
         O user pode ser um read-only com as permissões:
         Monitor
+        
+        Author: vfac@kyndryl.com
       vendor:
         name: viniciuscastro95@gmail.com
         version: 7.0-1
@@ -29,17 +31,17 @@ zabbix_export:
           trends: '0'
           params: |
             #!/bin/bash
-
+            
             # Tempo atual (epoch)
             now=$(date +%s)
-
+            
             # Epoch de 10 minutos atrás
             past=$((now - 600))
-
+            
             # Converter para o formato YYMMDDHHMMSS exigido pelo lseventlog
             since=$(date -d "@$past" +%y%m%d%H%M%S)
             until=$(date -d "@$now" +%y%m%d%H%M%S)
-
+            
             # Executar lseventlog com filtros de tempo
             lseventlog -delim : -filtervalue "last_timestamp>=$since:last_timestamp<=$until"
           username: '{$IBM.SW.SSH.USER}'
@@ -68,7 +70,7 @@ zabbix_export:
           trends: '0'
           params: |
             #!/bin/bash
-
+            
             commands=(
               "lsvdisk"
               "lsarray"
@@ -86,7 +88,7 @@ zabbix_export:
               "lssystem"
               "lssystemstats"
             )
-
+            
             for cmd in "${commands[@]}"; do
               echo "##BEGIN:$cmd"
               output=$($cmd -gui -delim : 2>&1)
@@ -132,10 +134,10 @@ zabbix_export:
                   var results = [];
                   var current = {};
                   var inSection = false;
-
+                  
                   for (var i = 0; i < lines.length; i++) {
                       var line = lines[i].trim();
-
+                  
                       if (line === "##BEGIN:lsvdisk") {
                           inSection = true;
                           continue;
@@ -146,9 +148,9 @@ zabbix_export:
                           }
                           break;
                       }
-
+                  
                       if (!inSection) continue;
-
+                  
                       if (line.startsWith("#VDISK:")) {
                           if (Object.keys(current).length > 0) {
                               results.push(current);
@@ -156,7 +158,7 @@ zabbix_export:
                           current = { vdisk: line.substring(8).trim() };
                           continue;
                       }
-
+                  
                       var parts = line.split(":");
                       if (parts.length >= 2) {
                           var key = parts[0].trim();
@@ -164,7 +166,7 @@ zabbix_export:
                           current[key] = value;
                       }
                   }
-
+                  
                   // Constrói CSV
                   var allKeys = {};
                   for (var i = 0; i < results.length; i++) {
@@ -174,7 +176,7 @@ zabbix_export:
                   }
                   var headers = Object.keys(allKeys);
                   var output = [headers.join(":")];
-
+                  
                   for (var i = 0; i < results.length; i++) {
                       var row = [];
                       for (var j = 0; j < headers.length; j++) {
@@ -183,7 +185,7 @@ zabbix_export:
                       }
                       output.push(row.join(":"));
                   }
-
+                  
                   return output.join("\n");
             - type: CSV_TO_JSON
               parameters:
@@ -209,18 +211,18 @@ zabbix_export:
                 - |
                   // Define o nome da seção que queremos extrair
                   var section = "lsarray";
-
+                  
                   // Regex para capturar tudo entre os delimitadores
                   var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
-
+                  
                   // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
                   var match = value.match(regex);
-
+                  
                   // Valida se encontrou a seção esperada e se ela tem conteúdo
                   if (!match || match.length < 2 || !match[1].trim()) {
                       throw "Seção 'lsenclosure' não encontrada ou vazia";
                   }
-
+                  
                   // Retorna apenas o conteúdo da seção
                   return match[1].trim();
             - type: CSV_TO_JSON
@@ -242,9 +244,9 @@ zabbix_export:
           trends: '0'
           description: |
             Use this command to display configuration information and drive VPD.
-
+            
             Note: Filtering should be permitted on all concise fields.
-
+            
             Note: A backup of system state is stored on quorum disks, which
             contributes to the physically used space. The amount of data that is
             used for this backup depends on the system configuration, but is
@@ -255,18 +257,18 @@ zabbix_export:
                 - |
                   // Define o nome da seção que queremos extrair
                   var section = "lsdrive";
-
+                  
                   // Regex para capturar tudo entre os delimitadores
                   var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
-
+                  
                   // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
                   var match = value.match(regex);
-
+                  
                   // Valida se encontrou a seção esperada e se ela tem conteúdo
                   if (!match || match.length < 2 || !match[1].trim()) {
                       throw "Seção 'lsenclosure' não encontrada ou vazia";
                   }
-
+                  
                   // Retorna apenas o conteúdo da seção
                   return match[1].trim();
             - type: CSV_TO_JSON
@@ -296,18 +298,18 @@ zabbix_export:
                 - |
                   // Define o nome da seção que queremos extrair
                   var section = "lsenclosure";
-
+                  
                   // Regex para capturar tudo entre os delimitadores
                   var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
-
+                  
                   // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
                   var match = value.match(regex);
-
+                  
                   // Valida se encontrou a seção esperada e se ela tem conteúdo
                   if (!match || match.length < 2 || !match[1].trim()) {
                       throw "Seção 'lsenclosure' não encontrada ou vazia";
                   }
-
+                  
                   // Retorna apenas o conteúdo da seção
                   return match[1].trim();
             - type: CSV_TO_JSON
@@ -339,24 +341,24 @@ zabbix_export:
                   // Define o nome da seção que queremos extrair
                   var section = "lsenclosurebattery";
                   var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
-
+                  
                   var match = value.match(regex);
-
+                  
                   if (!match || match.length < 2 || !match[1].trim()) {
                       throw "Seção '" + section + "' não encontrada ou vazia";
                   }
-
+                  
                   var raw = match[1].trim().replace(/\r/g, '');
                   var lines = raw.split("\n");
-
+                  
                   if (lines.length < 2) {
                       throw "Seção '" + section + "' está vazia ou incompleta";
                   }
-
+                  
                   var header = lines[0].split(":");
                   var colCount = header.length;
                   var cleaned = [lines[0]];
-
+                  
                   for (var i = 1; i < lines.length; i++) {
                       var fields = lines[i].split(":");
                       if (fields.length > colCount) {
@@ -367,7 +369,7 @@ zabbix_export:
                       }
                       cleaned.push(fields.join(":"));
                   }
-
+                  
                   return cleaned.join("\n");
             - type: CSV_TO_JSON
               parameters:
@@ -395,18 +397,18 @@ zabbix_export:
                 - |
                   // Define o nome da seção que queremos extrair
                   var section = "lsenclosurecanister";
-
+                  
                   // Regex para capturar tudo entre os delimitadores
                   var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
-
+                  
                   // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
                   var match = value.match(regex);
-
+                  
                   // Valida se encontrou a seção esperada e se ela tem conteúdo
                   if (!match || match.length < 2 || !match[1].trim()) {
                       throw "Seção 'lsenclosure' não encontrada ou vazia";
                   }
-
+                  
                   // Retorna apenas o conteúdo da seção
                   return match[1].trim();
             - type: CSV_TO_JSON
@@ -435,18 +437,18 @@ zabbix_export:
                 - |
                   // Define o nome da seção que queremos extrair
                   var section = "lsenclosurepsu";
-
+                  
                   // Regex para capturar tudo entre os delimitadores
                   var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
-
+                  
                   // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
                   var match = value.match(regex);
-
+                  
                   // Valida se encontrou a seção esperada e se ela tem conteúdo
                   if (!match || match.length < 2 || !match[1].trim()) {
                       throw "Seção 'lsenclosure' não encontrada ou vazia";
                   }
-
+                  
                   // Retorna apenas o conteúdo da seção
                   return match[1].trim();
             - type: CSV_TO_JSON
@@ -475,18 +477,18 @@ zabbix_export:
                 - |
                   // Define o nome da seção que queremos extrair
                   var section = "lshost";
-
+                  
                   // Regex para capturar tudo entre os delimitadores
                   var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
-
+                  
                   // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
                   var match = value.match(regex);
-
+                  
                   // Valida se encontrou a seção esperada e se ela tem conteúdo
                   if (!match || match.length < 2 || !match[1].trim()) {
                       throw "Seção 'lsenclosure' não encontrada ou vazia";
                   }
-
+                  
                   // Retorna apenas o conteúdo da seção
                   return match[1].trim();
             - type: CSV_TO_JSON
@@ -515,18 +517,18 @@ zabbix_export:
                 - |
                   // Define o nome da seção que queremos extrair
                   var section = "lsmdisk";
-
+                  
                   // Regex para capturar tudo entre os delimitadores
                   var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
-
+                  
                   // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
                   var match = value.match(regex);
-
+                  
                   // Valida se encontrou a seção esperada e se ela tem conteúdo
                   if (!match || match.length < 2 || !match[1].trim()) {
                       throw "Seção 'lsenclosure' não encontrada ou vazia";
                   }
-
+                  
                   // Retorna apenas o conteúdo da seção
                   return match[1].trim();
             - type: CSV_TO_JSON
@@ -558,24 +560,24 @@ zabbix_export:
                   // Define o nome da seção que queremos extrair
                   var section = "lsnodecanister";
                   var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
-
+                  
                   var match = value.match(regex);
-
+                  
                   if (!match || match.length < 2 || !match[1].trim()) {
                       throw "Seção '" + section + "' não encontrada ou vazia";
                   }
-
+                  
                   var raw = match[1].trim().replace(/\r/g, '');
                   var lines = raw.split("\n");
-
+                  
                   if (lines.length < 2) {
                       throw "Seção '" + section + "' está vazia ou incompleta";
                   }
-
+                  
                   var header = lines[0].split(":");
                   var colCount = header.length;
                   var cleaned = [lines[0]];
-
+                  
                   for (var i = 1; i < lines.length; i++) {
                       var fields = lines[i].split(":");
                       if (fields.length > colCount) {
@@ -586,7 +588,7 @@ zabbix_export:
                       }
                       cleaned.push(fields.join(":"));
                   }
-
+                  
                   return cleaned.join("\n");
             - type: CSV_TO_JSON
               parameters:
@@ -615,24 +617,24 @@ zabbix_export:
                   // Define o nome da seção que queremos extrair
                   var section = "lsportfc";
                   var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
-
+                  
                   var match = value.match(regex);
-
+                  
                   if (!match || match.length < 2 || !match[1].trim()) {
                       throw "Seção '" + section + "' não encontrada ou vazia";
                   }
-
+                  
                   var raw = match[1].trim().replace(/\r/g, '');
                   var lines = raw.split("\n");
-
+                  
                   if (lines.length < 2) {
                       throw "Seção '" + section + "' está vazia ou incompleta";
                   }
-
+                  
                   var header = lines[0].split(":");
                   var colCount = header.length;
                   var cleaned = [lines[0]];
-
+                  
                   for (var i = 1; i < lines.length; i++) {
                       var fields = lines[i].split(":");
                       if (fields.length > colCount) {
@@ -643,7 +645,7 @@ zabbix_export:
                       }
                       cleaned.push(fields.join(":"));
                   }
-
+                  
                   return cleaned.join("\n");
             - type: CSV_TO_JSON
               parameters:
@@ -669,18 +671,18 @@ zabbix_export:
                 - |
                   // Define o nome da seção que queremos extrair
                   var section = "lsportsas";
-
+                  
                   // Regex para capturar tudo entre os delimitadores
                   var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
-
+                  
                   // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
                   var match = value.match(regex);
-
+                  
                   // Valida se encontrou a seção esperada e se ela tem conteúdo
                   if (!match || match.length < 2 || !match[1].trim()) {
                       throw "Seção 'lsenclosure' não encontrada ou vazia";
                   }
-
+                  
                   // Retorna apenas o conteúdo da seção
                   return match[1].trim();
             - type: CSV_TO_JSON
@@ -711,18 +713,18 @@ zabbix_export:
                 - |
                   // Define o nome da seção que queremos extrair
                   var section = "lsquorum";
-
+                  
                   // Regex para capturar tudo entre os delimitadores
                   var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
-
+                  
                   // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
                   var match = value.match(regex);
-
+                  
                   // Valida se encontrou a seção esperada e se ela tem conteúdo
                   if (!match || match.length < 2 || !match[1].trim()) {
                       throw "Seção 'lsenclosure' não encontrada ou vazia";
                   }
-
+                  
                   // Retorna apenas o conteúdo da seção
                   return match[1].trim();
             - type: CSV_TO_JSON
@@ -748,18 +750,18 @@ zabbix_export:
                 - |
                   // Define o nome da seção que queremos extrair
                   var section = "lssystem";
-
+                  
                   // Regex para capturar tudo entre os delimitadores
                   var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
-
+                  
                   // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
                   var match = value.match(regex);
-
+                  
                   // Valida se encontrou a seção esperada e se ela tem conteúdo
                   if (!match || match.length < 2 || !match[1].trim()) {
                       throw "Seção 'lsenclosure' não encontrada ou vazia";
                   }
-
+                  
                   // Retorna apenas o conteúdo da seção
                   return match[1].trim();
             - type: CSV_TO_JSON
@@ -793,18 +795,18 @@ zabbix_export:
                 - |
                   // Define o nome da seção que queremos extrair
                   var section = "lssystemstats";
-
+                  
                   // Regex para capturar tudo entre os delimitadores
                   var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
-
+                  
                   // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
                   var match = value.match(regex);
-
+                  
                   // Valida se encontrou a seção esperada e se ela tem conteúdo
                   if (!match || match.length < 2 || !match[1].trim()) {
                       throw "Seção 'lsenclosure' não encontrada ou vazia";
                   }
-
+                  
                   // Retorna apenas o conteúdo da seção
                   return match[1].trim();
             - type: CSV_TO_JSON
@@ -830,18 +832,18 @@ zabbix_export:
                 - |
                   // Define o nome da seção que queremos extrair
                   var section = "lsvdisk";
-
+                  
                   // Regex para capturar tudo entre os delimitadores
                   var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
-
+                  
                   // Aplica a regex na variável `value` que contém todo o conteúdo bruto do SSH
                   var match = value.match(regex);
-
+                  
                   // Valida se encontrou a seção esperada e se ela tem conteúdo
                   if (!match || match.length < 2 || !match[1].trim()) {
                       throw "Seção 'lsenclosure' não encontrada ou vazia";
                   }
-
+                  
                   // Retorna apenas o conteúdo da seção
                   return match[1].trim();
             - type: CSV_TO_JSON
@@ -919,19 +921,19 @@ zabbix_export:
               parameters:
                 - |
                   var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
-
+                  
                   if (!matches) {
                       throw "Formato inválido: " + value;
                   }
-
+                  
                   var number = matches[1].replace(',', '.');
                   var unit = matches[2].toUpperCase();
-
+                  
                   var size = parseFloat(number);
                   if (isNaN(size)) {
                       throw "Número inválido: " + number;
                   }
-
+                  
                   var multipliers = {
                       B: 1,
                       KB: 1e3,
@@ -945,11 +947,11 @@ zabbix_export:
                       TIB: 1024 ** 4,
                       PIB: 1024 ** 5
                   };
-
+                  
                   if (!(unit in multipliers)) {
                       throw "Unidade desconhecida: " + unit;
                   }
-
+                  
                   return size * multipliers[unit];
           master_item:
             key: storwize.get.system.raw
@@ -1499,19 +1501,19 @@ zabbix_export:
               parameters:
                 - |
                   var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
-
+                  
                   if (!matches) {
                       throw "Formato inválido: " + value;
                   }
-
+                  
                   var number = matches[1].replace(',', '.');
                   var unit = matches[2].toUpperCase();
-
+                  
                   var size = parseFloat(number);
                   if (isNaN(size)) {
                       throw "Número inválido: " + number;
                   }
-
+                  
                   var multipliers = {
                       B: 1,
                       KB: 1e3,
@@ -1525,11 +1527,11 @@ zabbix_export:
                       TIB: 1024 ** 4,
                       PIB: 1024 ** 5
                   };
-
+                  
                   if (!(unit in multipliers)) {
                       throw "Unidade desconhecida: " + unit;
                   }
-
+                  
                   return size * multipliers[unit];
           master_item:
             key: storwize.get.system.raw
@@ -1552,19 +1554,19 @@ zabbix_export:
               parameters:
                 - |
                   var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
-
+                  
                   if (!matches) {
                       throw "Formato inválido: " + value;
                   }
-
+                  
                   var number = matches[1].replace(',', '.');
                   var unit = matches[2].toUpperCase();
-
+                  
                   var size = parseFloat(number);
                   if (isNaN(size)) {
                       throw "Número inválido: " + number;
                   }
-
+                  
                   var multipliers = {
                       B: 1,
                       KB: 1e3,
@@ -1578,11 +1580,11 @@ zabbix_export:
                       TIB: 1024 ** 4,
                       PIB: 1024 ** 5
                   };
-
+                  
                   if (!(unit in multipliers)) {
                       throw "Unidade desconhecida: " + unit;
                   }
-
+                  
                   return size * multipliers[unit];
           master_item:
             key: storwize.get.system.raw
@@ -1626,7 +1628,7 @@ zabbix_export:
               trends: '0'
               description: |
                 raid_level: The RAID level of the array
-
+                
                 Value: ( RAID0 , RAID1 , RAID5 , RAID6 , RAID10 ).
               preprocessing:
                 - type: JSONPATH
@@ -1673,7 +1675,7 @@ zabbix_export:
               trends: '0'
               description: |
                 tier: Tier assigned to the array (auto or manual).
-
+                
                 Values: tier0_flash, tier1_flash, tier_enterprise, tier_nearline, tier_scm.
               preprocessing:
                 - type: JSONPATH
@@ -1935,7 +1937,7 @@ zabbix_export:
               trends: '0'
               description: |
                 Identifies the status of the battery:
-
+                
                 * online indicates that the battery is present and working as usual.
                 * degraded indicates that the battery is present but not working as usual.
                 * offline indicates that the battery cannot be detected.
@@ -1988,6 +1990,14 @@ zabbix_export:
                 - type: JSONPATH
                   parameters:
                     - '$[?(@.canister_id==''{#CANISTER.ID}'')].SAS_port_1_status.first()'
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      if (!value || value.trim() === "") {
+                          return "Port sas not configured";
+                      }
+                      
+                      return value;
               master_item:
                 key: storwize.get.enclosurecanister.raw
               tags:
@@ -1995,7 +2005,7 @@ zabbix_export:
                   value: '{#ENCLOSURE.ID}'
               trigger_prototypes:
                 - uuid: 7e80ef3112804aa6937ca7ed903fb44b
-                  expression: 'find(/IBM Storwize by SSH/storwize.enclosure.canister.port1.status[{#ENCLOSURE.ID},{#CANISTER.ID}],,"like","online")=0'
+                  expression: 'find(/IBM Storwize by SSH/storwize.enclosure.canister.port1.status[{#ENCLOSURE.ID},{#CANISTER.ID}],,"like","online")=0 and find(/IBM Storwize by SSH/storwize.enclosure.canister.port1.status[{#ENCLOSURE.ID},{#CANISTER.ID}],,"like","Port sas not configured")=0'
                   name: 'Storwize: Enclosure {#ENCLOSURE.ID} Canister {#CANISTER.ID} SAS_port_1_status is {ITEM.VALUE}'
                   priority: HIGH
                   manual_close: 'YES'
@@ -2017,6 +2027,14 @@ zabbix_export:
                 - type: JSONPATH
                   parameters:
                     - '$[?(@.canister_id==''{#CANISTER.ID}'')].SAS_port_2_status.first()'
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      if (!value || value.trim() === "") {
+                          return "Port sas not configured";
+                      }
+                      
+                      return value;
               master_item:
                 key: storwize.get.enclosurecanister.raw
               tags:
@@ -2024,7 +2042,7 @@ zabbix_export:
                   value: '{#ENCLOSURE.ID}'
               trigger_prototypes:
                 - uuid: b17ae8e251254e68866393c3bfde6bed
-                  expression: 'find(/IBM Storwize by SSH/storwize.enclosure.canister.port2.status[{#ENCLOSURE.ID},{#CANISTER.ID}],,"like","online")=0'
+                  expression: 'find(/IBM Storwize by SSH/storwize.enclosure.canister.port2.status[{#ENCLOSURE.ID},{#CANISTER.ID}],,"like","online")=0 and find(/IBM Storwize by SSH/storwize.enclosure.canister.port2.status[{#ENCLOSURE.ID},{#CANISTER.ID}],,"like","Port sas not configured")=0'
                   name: 'Storwize: Enclosure {#ENCLOSURE.ID} Canister {#CANISTER.ID} SAS_port_2_status is {ITEM.VALUE}'
                   priority: HIGH
                   manual_close: 'YES'
@@ -2054,7 +2072,7 @@ zabbix_export:
               trends: '0'
               description: |
                 Indicates the status of the canister. The values are:
-
+                
                 * online indicates that the canister is present and working normally.
                 * degraded indicates that the canister is present but not working normally
                 * offline indicates that the canister could not be detected.
@@ -2367,19 +2385,19 @@ zabbix_export:
                   parameters:
                     - |
                       var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
-
+                      
                       if (!matches) {
                           throw "Formato inválido: " + value;
                       }
-
+                      
                       var number = matches[1].replace(',', '.');
                       var unit = matches[2].toUpperCase();
-
+                      
                       var size = parseFloat(number);
                       if (isNaN(size)) {
                           throw "Número inválido: " + number;
                       }
-
+                      
                       var multipliers = {
                           B: 1,
                           KB: 1e3,
@@ -2393,11 +2411,11 @@ zabbix_export:
                           TIB: 1024 ** 4,
                           PIB: 1024 ** 5
                       };
-
+                      
                       if (!(unit in multipliers)) {
                           throw "Unidade desconhecida: " + unit;
                       }
-
+                      
                       return size * multipliers[unit];
               master_item:
                 key: storwize.get.mdisk.raw
@@ -2421,19 +2439,19 @@ zabbix_export:
                   parameters:
                     - |
                       var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
-
+                      
                       if (!matches) {
                           throw "Formato inválido: " + value;
                       }
-
+                      
                       var number = matches[1].replace(',', '.');
                       var unit = matches[2].toUpperCase();
-
+                      
                       var size = parseFloat(number);
                       if (isNaN(size)) {
                           throw "Número inválido: " + number;
                       }
-
+                      
                       var multipliers = {
                           B: 1,
                           KB: 1e3,
@@ -2447,11 +2465,11 @@ zabbix_export:
                           TIB: 1024 ** 4,
                           PIB: 1024 ** 5
                       };
-
+                      
                       if (!(unit in multipliers)) {
                           throw "Unidade desconhecida: " + unit;
                       }
-
+                      
                       return size * multipliers[unit];
               master_item:
                 key: storwize.get.mdisk.raw
@@ -2476,19 +2494,19 @@ zabbix_export:
                   parameters:
                     - |
                       var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
-
+                      
                       if (!matches) {
                           throw "Formato inválido: " + value;
                       }
-
+                      
                       var number = matches[1].replace(',', '.');
                       var unit = matches[2].toUpperCase();
-
+                      
                       var size = parseFloat(number);
                       if (isNaN(size)) {
                           throw "Número inválido: " + number;
                       }
-
+                      
                       var multipliers = {
                           B: 1,
                           KB: 1e3,
@@ -2502,11 +2520,11 @@ zabbix_export:
                           TIB: 1024 ** 4,
                           PIB: 1024 ** 5
                       };
-
+                      
                       if (!(unit in multipliers)) {
                           throw "Unidade desconhecida: " + unit;
                       }
-
+                      
                       return size * multipliers[unit];
               master_item:
                 key: storwize.get.mdisk.raw
@@ -2531,19 +2549,19 @@ zabbix_export:
                   parameters:
                     - |
                       var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
-
+                      
                       if (!matches) {
                           throw "Formato inválido: " + value;
                       }
-
+                      
                       var number = matches[1].replace(',', '.');
                       var unit = matches[2].toUpperCase();
-
+                      
                       var size = parseFloat(number);
                       if (isNaN(size)) {
                           throw "Número inválido: " + number;
                       }
-
+                      
                       var multipliers = {
                           B: 1,
                           KB: 1e3,
@@ -2557,11 +2575,11 @@ zabbix_export:
                           TIB: 1024 ** 4,
                           PIB: 1024 ** 5
                       };
-
+                      
                       if (!(unit in multipliers)) {
                           throw "Unidade desconhecida: " + unit;
                       }
-
+                      
                       return size * multipliers[unit];
               master_item:
                 key: storwize.get.mdisk.raw
@@ -2852,19 +2870,19 @@ zabbix_export:
                   parameters:
                     - |
                       var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
-
+                      
                       if (!matches) {
                           throw "Formato inválido: " + value;
                       }
-
+                      
                       var number = matches[1].replace(',', '.');
                       var unit = matches[2].toUpperCase();
-
+                      
                       var size = parseFloat(number);
                       if (isNaN(size)) {
                           throw "Número inválido: " + number;
                       }
-
+                      
                       var multipliers = {
                           B: 1,
                           KB: 1e3,
@@ -2878,11 +2896,11 @@ zabbix_export:
                           TIB: 1024 ** 4,
                           PIB: 1024 ** 5
                       };
-
+                      
                       if (!(unit in multipliers)) {
                           throw "Unidade desconhecida: " + unit;
                       }
-
+                      
                       return size * multipliers[unit];
               master_item:
                 key: storwize.get.vdisk.raw
@@ -2926,19 +2944,19 @@ zabbix_export:
                   parameters:
                     - |
                       var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
-
+                      
                       if (!matches) {
                           throw "Formato inválido: " + value;
                       }
-
+                      
                       var number = matches[1].replace(',', '.');
                       var unit = matches[2].toUpperCase();
-
+                      
                       var size = parseFloat(number);
                       if (isNaN(size)) {
                           throw "Número inválido: " + number;
                       }
-
+                      
                       var multipliers = {
                           B: 1,
                           KB: 1e3,
@@ -2952,11 +2970,11 @@ zabbix_export:
                           TIB: 1024 ** 4,
                           PIB: 1024 ** 5
                       };
-
+                      
                       if (!(unit in multipliers)) {
                           throw "Unidade desconhecida: " + unit;
                       }
-
+                      
                       return size * multipliers[unit];
               master_item:
                 key: 'ssh.run[get.storwize.vdisk]'
@@ -3003,19 +3021,19 @@ zabbix_export:
                   parameters:
                     - |
                       var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
-
+                      
                       if (!matches) {
                           throw "Formato inválido: " + value;
                       }
-
+                      
                       var number = matches[1].replace(',', '.');
                       var unit = matches[2].toUpperCase();
-
+                      
                       var size = parseFloat(number);
                       if (isNaN(size)) {
                           throw "Número inválido: " + number;
                       }
-
+                      
                       var multipliers = {
                           B: 1,
                           KB: 1e3,
@@ -3029,11 +3047,11 @@ zabbix_export:
                           TIB: 1024 ** 4,
                           PIB: 1024 ** 5
                       };
-
+                      
                       if (!(unit in multipliers)) {
                           throw "Unidade desconhecida: " + unit;
                       }
-
+                      
                       return size * multipliers[unit];
               master_item:
                 key: 'ssh.run[get.storwize.vdisk]'
@@ -3053,7 +3071,7 @@ zabbix_export:
               trends: '0'
               description: |
                 Indicates the status. The value can be online, offline, degraded, or deleting.
-
+                
                 For online HyperSwap volumes the scope of offline copy is ncluded with the status information. For offline volumes the auxiliary copy is included with the status information even if the copy associated with that is online.
               preprocessing:
                 - type: JSONPATH
@@ -3110,19 +3128,19 @@ zabbix_export:
                   parameters:
                     - |
                       var matches = value.trim().match(/^([\d.,]+)\s*([KMGTP]?i?B)$/i);
-
+                      
                       if (!matches) {
                           throw "Formato inválido: " + value;
                       }
-
+                      
                       var number = matches[1].replace(',', '.');
                       var unit = matches[2].toUpperCase();
-
+                      
                       var size = parseFloat(number);
                       if (isNaN(size)) {
                           throw "Número inválido: " + number;
                       }
-
+                      
                       var multipliers = {
                           B: 1,
                           KB: 1e3,
@@ -3136,11 +3154,11 @@ zabbix_export:
                           TIB: 1024 ** 4,
                           PIB: 1024 ** 5
                       };
-
+                      
                       if (!(unit in multipliers)) {
                           throw "Unidade desconhecida: " + unit;
                       }
-
+                      
                       return size * multipliers[unit];
               master_item:
                 key: 'ssh.run[get.storwize.vdisk]'
