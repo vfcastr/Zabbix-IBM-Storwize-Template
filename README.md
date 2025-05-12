@@ -1,6 +1,8 @@
-# 📡 Zabbix Template - IBM Storwize via SSH
+# 📡 Zabbix Template - IBM Spectrum Virtualize via SSH
 
-Template for monitoring IBM Storwize (v3700, v5000, v7000, SVC) via SSH in Zabbix 7+ environments.
+This template collects metrics from storage solutions which are built with the IBM Spectrum Virtualize software. Storage solutions built with the IBM Spectrum Virtualize software are the IBM FlashSystem V9000 system, the IBM SAN Volume Controller and the IBM Storwize Family
+
+The template was tested on Storewise v7000 e Flashsystem 9100.
 
 > ✅ Designed for production environments using a read-only user.
 
