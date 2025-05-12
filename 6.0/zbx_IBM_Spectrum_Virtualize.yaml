@@ -2,15 +2,17 @@ zabbix_export:
   version: '6.0'
   templates:
     - uuid: 0d0e31b3fec3497ab3a1a8a92341b43c
-      template: 'IBM Storwize by SSH'
-      name: 'IBM Storwize by SSH'
+      template: 'IBM Spectrum Virtualize by SSH'
+      name: 'IBM Spectrum Virtualize by SSH'
       description: |
-        Template para monitorar o IBM Storwize (v3700, v5000, v7000, SAN Volume Controller)..
+        This template collects metrics from storage solutions which are built with the IBM Spectrum Virtualize software. Storage solutions built with the IBM Spectrum Virtualize software are the IBM FlashSystem V9000 system, the IBM SAN Volume Controller and the IBM Storwize Family
 
-        O template foi testado na versão Storewise v7000.
+        The template was tested on Storewise v7000 e Flashsystem 9100
 
-        O user pode ser um read-only com as permissões:
+        User can be read-only:
         Monitor
+
+        Author: viniciuscastro95@gmail.com
       groups:
         - name: Templates/SAN
       items:
@@ -79,6 +81,8 @@ zabbix_export:
               "lsportsas"
               "lssystem"
               "lssystemstats"
+              "lsnodecanisterstats"
+              "lsenclosurestats"
             )
 
             for cmd in "${commands[@]}"; do
@@ -96,7 +100,7 @@ zabbix_export:
               value: raw
           triggers:
             - uuid: 491ea82bdfb54bf18446eb636bb1fcf6
-              expression: 'nodata(/IBM Storwize by SSH/ssh.run[get.storwize.stats],20m)=1'
+              expression: 'nodata(/IBM Spectrum Virtualize by SSH/ssh.run[get.storwize.stats],20m)=1'
               name: 'Storwize: Data collecting is falling'
               priority: INFO
               manual_close: 'YES'
@@ -212,7 +216,7 @@ zabbix_export:
 
                   // Valida se encontrou a seção esperada e se ela tem conteúdo
                   if (!match || match.length < 2 || !match[1].trim()) {
-                      throw "Seção 'lsenclosure' não encontrada ou vazia";
+                      throw "Seção 'lsarray' não encontrada ou vazia";
                   }
 
                   // Retorna apenas o conteúdo da seção
@@ -258,7 +262,7 @@ zabbix_export:
 
                   // Valida se encontrou a seção esperada e se ela tem conteúdo
                   if (!match || match.length < 2 || !match[1].trim()) {
-                      throw "Seção 'lsenclosure' não encontrada ou vazia";
+                      throw "Seção 'lsdrive' não encontrada ou vazia";
                   }
 
                   // Retorna apenas o conteúdo da seção
@@ -398,7 +402,7 @@ zabbix_export:
 
                   // Valida se encontrou a seção esperada e se ela tem conteúdo
                   if (!match || match.length < 2 || !match[1].trim()) {
-                      throw "Seção 'lsenclosure' não encontrada ou vazia";
+                      throw "Seção 'lsenclosurecanister' não encontrada ou vazia";
                   }
 
                   // Retorna apenas o conteúdo da seção
@@ -438,11 +442,70 @@ zabbix_export:
 
                   // Valida se encontrou a seção esperada e se ela tem conteúdo
                   if (!match || match.length < 2 || !match[1].trim()) {
-                      throw "Seção 'lsenclosure' não encontrada ou vazia";
+                      throw "Seção 'lsenclosurepsu' não encontrada ou vazia";
                   }
 
                   // Retorna apenas o conteúdo da seção
                   return match[1].trim();
+            - type: CSV_TO_JSON
+              parameters:
+                - ':'
+                - ''
+                - '1'
+          master_item:
+            key: 'ssh.run[get.storwize.stats]'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: 541b62d2c8f240e2b0b2e521e200ef60
+          name: 'Storwize: Get enclosurestats'
+          type: DEPENDENT
+          key: storwize.get.enclosurestats.raw
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          description: |
+            This command returns a concise list or a detailed view of nodes or node
+            canisters that are part of the system. This table provides the possible
+            values that are applicable to the attributes that are displayed as data
+            in the output views.
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // Define o nome da seção que queremos extrair
+                  var section = "lsenclosurestats";
+                  var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
+
+                  var match = value.match(regex);
+
+                  if (!match || match.length < 2 || !match[1].trim()) {
+                      throw "Seção '" + section + "' não encontrada ou vazia";
+                  }
+
+                  var raw = match[1].trim().replace(/\r/g, '');
+                  var lines = raw.split("\n");
+
+                  if (lines.length < 2) {
+                      throw "Seção '" + section + "' está vazia ou incompleta";
+                  }
+
+                  var header = lines[0].split(":");
+                  var colCount = header.length;
+                  var cleaned = [lines[0]];
+
+                  for (var i = 1; i < lines.length; i++) {
+                      var fields = lines[i].split(":");
+                      if (fields.length > colCount) {
+                          fields = fields.slice(0, colCount);
+                      }
+                      while (fields.length < colCount) {
+                          fields.push(""); // completa se faltar
+                      }
+                      cleaned.push(fields.join(":"));
+                  }
+
+                  return cleaned.join("\n");
             - type: CSV_TO_JSON
               parameters:
                 - ':'
@@ -478,7 +541,7 @@ zabbix_export:
 
                   // Valida se encontrou a seção esperada e se ela tem conteúdo
                   if (!match || match.length < 2 || !match[1].trim()) {
-                      throw "Seção 'lsenclosure' não encontrada ou vazia";
+                      throw "Seção 'lshost' não encontrada ou vazia";
                   }
 
                   // Retorna apenas o conteúdo da seção
@@ -518,7 +581,7 @@ zabbix_export:
 
                   // Valida se encontrou a seção esperada e se ela tem conteúdo
                   if (!match || match.length < 2 || !match[1].trim()) {
-                      throw "Seção 'lsenclosure' não encontrada ou vazia";
+                      throw "Seção 'lsmdisk' não encontrada ou vazia";
                   }
 
                   // Retorna apenas o conteúdo da seção
@@ -551,6 +614,65 @@ zabbix_export:
                 - |
                   // Define o nome da seção que queremos extrair
                   var section = "lsnodecanister";
+                  var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
+
+                  var match = value.match(regex);
+
+                  if (!match || match.length < 2 || !match[1].trim()) {
+                      throw "Seção '" + section + "' não encontrada ou vazia";
+                  }
+
+                  var raw = match[1].trim().replace(/\r/g, '');
+                  var lines = raw.split("\n");
+
+                  if (lines.length < 2) {
+                      throw "Seção '" + section + "' está vazia ou incompleta";
+                  }
+
+                  var header = lines[0].split(":");
+                  var colCount = header.length;
+                  var cleaned = [lines[0]];
+
+                  for (var i = 1; i < lines.length; i++) {
+                      var fields = lines[i].split(":");
+                      if (fields.length > colCount) {
+                          fields = fields.slice(0, colCount);
+                      }
+                      while (fields.length < colCount) {
+                          fields.push(""); // completa se faltar
+                      }
+                      cleaned.push(fields.join(":"));
+                  }
+
+                  return cleaned.join("\n");
+            - type: CSV_TO_JSON
+              parameters:
+                - ':'
+                - ''
+                - '1'
+          master_item:
+            key: 'ssh.run[get.storwize.stats]'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: 7bb0417b54114bf2828d799ab558c4e2
+          name: 'Storwize: Get nodecanisterstats'
+          type: DEPENDENT
+          key: storwize.get.nodecanisterstats.raw
+          delay: '0'
+          value_type: TEXT
+          trends: '0'
+          description: |
+            This command returns a concise list or a detailed view of nodes or node
+            canisters that are part of the system. This table provides the possible
+            values that are applicable to the attributes that are displayed as data
+            in the output views.
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  // Define o nome da seção que queremos extrair
+                  var section = "lsnodecanisterstats";
                   var regex = new RegExp("##BEGIN:" + section + "\\n([\\s\\S]*?)##END:" + section, "m");
 
                   var match = value.match(regex);
@@ -672,7 +794,7 @@ zabbix_export:
 
                   // Valida se encontrou a seção esperada e se ela tem conteúdo
                   if (!match || match.length < 2 || !match[1].trim()) {
-                      throw "Seção 'lsenclosure' não encontrada ou vazia";
+                      throw "Seção 'lsportsas' não encontrada ou vazia";
                   }
 
                   // Retorna apenas o conteúdo da seção
@@ -714,7 +836,7 @@ zabbix_export:
 
                   // Valida se encontrou a seção esperada e se ela tem conteúdo
                   if (!match || match.length < 2 || !match[1].trim()) {
-                      throw "Seção 'lsenclosure' não encontrada ou vazia";
+                      throw "Seção 'lsquorum' não encontrada ou vazia";
                   }
 
                   // Retorna apenas o conteúdo da seção
@@ -1720,9 +1842,9 @@ zabbix_export:
                   value: '{#MDISK.NAME}'
               trigger_prototypes:
                 - uuid: f9c92b0898ce4e32a412d16ec5de011b
-                  expression: 'find(/IBM Storwize by SSH/storwize.drive.port1.status[{#DRIVE.ID}],,"like","online")=0'
+                  expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.drive.port1.status[{#DRIVE.ID}],,"like","online")=0'
                   recovery_mode: RECOVERY_EXPRESSION
-                  recovery_expression: 'find(/IBM Storwize by SSH/storwize.drive.port1.status[{#DRIVE.ID}],,"like","online")=1'
+                  recovery_expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.drive.port1.status[{#DRIVE.ID}],,"like","online")=1'
                   name: 'Storwize: Drive ID: {#DRIVE.ID} Port 1 Status is {ITEM.VALUE}'
                   priority: HIGH
                   manual_close: 'YES'
@@ -1790,17 +1912,17 @@ zabbix_export:
                   value: '{#MDISK.NAME}'
               trigger_prototypes:
                 - uuid: 41d2dfae7ebb46e7b107e2603440037f
-                  expression: 'find(/IBM Storwize by SSH/storwize.drive.status[{#DRIVE.ID}],,"like","online")=0'
+                  expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.drive.status[{#DRIVE.ID}],,"like","online")=0'
                   recovery_mode: RECOVERY_EXPRESSION
-                  recovery_expression: 'find(/IBM Storwize by SSH/storwize.drive.status[{#DRIVE.ID}],,"like","online")=1'
+                  recovery_expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.drive.status[{#DRIVE.ID}],,"like","online")=1'
                   name: 'Storwize: Drive ID: {#DRIVE.ID} Status is {ITEM.VALUE}'
                   priority: AVERAGE
                   manual_close: 'YES'
           trigger_prototypes:
             - uuid: a53e63f5aa19410ea1139a117cc5ea2c
-              expression: 'find(/IBM Storwize by SSH/storwize.drive.port2.status[{#DRIVE.ID}],,"like","online")=0'
+              expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.drive.port2.status[{#DRIVE.ID}],,"like","online")=0'
               recovery_mode: RECOVERY_EXPRESSION
-              recovery_expression: 'find(/IBM Storwize by SSH/storwize.drive.port1.status[{#DRIVE.ID}],,"like","online")=1'
+              recovery_expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.drive.port1.status[{#DRIVE.ID}],,"like","online")=1'
               name: 'Storwize: Drive ID: {#DRIVE.ID} Port 2 Status is {ITEM.VALUE}'
               priority: HIGH
               manual_close: 'YES'
@@ -1897,7 +2019,7 @@ zabbix_export:
                   value: '{#ENCLOSURE.ID}'
               trigger_prototypes:
                 - uuid: c9f55345a5834964bc8081d081bcac8a
-                  expression: 'find(/IBM Storwize by SSH/storwize.enclosure.battery.eof[{#ENCLOSURE.ID},{#BATTERY.ID}],,"like","yes")=1'
+                  expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.enclosure.battery.eof[{#ENCLOSURE.ID},{#BATTERY.ID}],,"like","yes")=1'
                   name: 'Storwize: Enclosure {#ENCLOSURE.ID} Battery {#BATTERY.ID} in End of life'
                   priority: HIGH
                   manual_close: 'YES'
@@ -1946,9 +2068,9 @@ zabbix_export:
                   value: '{#ENCLOSURE.ID}'
               trigger_prototypes:
                 - uuid: 99d6ec865bae4c8a89ac5bb475b92996
-                  expression: 'find(/IBM Storwize by SSH/storwize.enclosure.battery.status[{#ENCLOSURE.ID},{#BATTERY.ID}],,"like","online")=0'
+                  expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.enclosure.battery.status[{#ENCLOSURE.ID},{#BATTERY.ID}],,"like","online")=0'
                   recovery_mode: RECOVERY_EXPRESSION
-                  recovery_expression: 'find(/IBM Storwize by SSH/storwize.enclosure.battery.status[{#ENCLOSURE.ID},{#BATTERY.ID}],,"like","online")=1'
+                  recovery_expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.enclosure.battery.status[{#ENCLOSURE.ID},{#BATTERY.ID}],,"like","online")=1'
                   name: 'Storwize: Enclosure {#ENCLOSURE.ID} Battery {#BATTERY.ID} Status is {ITEM.VALUE}'
                   manual_close: 'YES'
           master_item:
@@ -1982,6 +2104,14 @@ zabbix_export:
                 - type: JSONPATH
                   parameters:
                     - '$[?(@.canister_id==''{#CANISTER.ID}'')].SAS_port_1_status.first()'
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      if (!value || value.trim() === "") {
+                          return "Port sas not available";
+                      }
+
+                      return value;
               master_item:
                 key: storwize.get.enclosurecanister.raw
               tags:
@@ -1989,7 +2119,7 @@ zabbix_export:
                   value: '{#ENCLOSURE.ID}'
               trigger_prototypes:
                 - uuid: 7e80ef3112804aa6937ca7ed903fb44b
-                  expression: 'find(/IBM Storwize by SSH/storwize.enclosure.canister.port1.status[{#ENCLOSURE.ID},{#CANISTER.ID}],,"like","online")=0'
+                  expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.enclosure.canister.port1.status[{#ENCLOSURE.ID},{#CANISTER.ID}],,"like","online")=0 and find(/IBM Spectrum Virtualize by SSH/storwize.enclosure.canister.port1.status[{#ENCLOSURE.ID},{#CANISTER.ID}],,"like","Port sas not available")=0'
                   name: 'Storwize: Enclosure {#ENCLOSURE.ID} Canister {#CANISTER.ID} SAS_port_1_status is {ITEM.VALUE}'
                   priority: HIGH
                   manual_close: 'YES'
@@ -2011,6 +2141,14 @@ zabbix_export:
                 - type: JSONPATH
                   parameters:
                     - '$[?(@.canister_id==''{#CANISTER.ID}'')].SAS_port_2_status.first()'
+                - type: JAVASCRIPT
+                  parameters:
+                    - |
+                      if (!value || value.trim() === "") {
+                          return "Port sas not available";
+                      }
+
+                      return value;
               master_item:
                 key: storwize.get.enclosurecanister.raw
               tags:
@@ -2018,7 +2156,7 @@ zabbix_export:
                   value: '{#ENCLOSURE.ID}'
               trigger_prototypes:
                 - uuid: b17ae8e251254e68866393c3bfde6bed
-                  expression: 'find(/IBM Storwize by SSH/storwize.enclosure.canister.port2.status[{#ENCLOSURE.ID},{#CANISTER.ID}],,"like","online")=0'
+                  expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.enclosure.canister.port2.status[{#ENCLOSURE.ID},{#CANISTER.ID}],,"like","online")=0 and find(/IBM Spectrum Virtualize by SSH/storwize.enclosure.canister.port2.status[{#ENCLOSURE.ID},{#CANISTER.ID}],,"like","Port sas not available")=0'
                   name: 'Storwize: Enclosure {#ENCLOSURE.ID} Canister {#CANISTER.ID} SAS_port_2_status is {ITEM.VALUE}'
                   priority: HIGH
                   manual_close: 'YES'
@@ -2063,7 +2201,7 @@ zabbix_export:
                   value: '{#ENCLOSURE.ID}'
               trigger_prototypes:
                 - uuid: a65ab63a79564ac4a372b4587e51926a
-                  expression: 'find(/IBM Storwize by SSH/storwize.enclosure.canister.status[{#ENCLOSURE.ID},{#CANISTER.ID}],,"like","online")=0'
+                  expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.enclosure.canister.status[{#ENCLOSURE.ID},{#CANISTER.ID}],,"like","online")=0'
                   name: 'Storwize: Enclosure {#ENCLOSURE.ID} Canister {#CANISTER.ID} Status is {ITEM.VALUE}'
                   priority: HIGH
                   manual_close: 'YES'
@@ -2161,6 +2299,23 @@ zabbix_export:
               tags:
                 - tag: enclosure_id
                   value: '{#ENCLOSURE.ID}'
+            - uuid: 04e583bd5b1e4a17b5c121e91506284e
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Power Usage'
+              type: DEPENDENT
+              key: 'storwize.enclosure.power.usage[{#ENCLOSURE.SN}]'
+              delay: '0'
+              trends: '0'
+              units: W
+              description: 'Indicates the temp in C'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.enclosure_id==''{#ENCLOSURE.ID}'')&&(@.stat_name==''power_w''))].stat_current.first()'
+              master_item:
+                key: storwize.get.enclosurestats.raw
+              tags:
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
             - uuid: 71933bad23b54c6093d85f024c097f65
               name: 'Storwize: Enclosure {#ENCLOSURE.ID} Online PSU'
               type: DEPENDENT
@@ -2216,7 +2371,7 @@ zabbix_export:
                   value: '{#ENCLOSURE.ID}'
               trigger_prototypes:
                 - uuid: c311dfb27da6412584b88a627ba62f2b
-                  expression: 'find(/IBM Storwize by SSH/storwize.enclosure.status[{#ENCLOSURE.SN}],,"like","online")=0'
+                  expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.enclosure.status[{#ENCLOSURE.SN}],,"like","online")=0'
                   name: 'Storwize: Enclosure {#ENCLOSURE.ID} Status is {ITEM.VALUE}'
                   priority: HIGH
                   manual_close: 'YES'
@@ -2237,19 +2392,36 @@ zabbix_export:
               tags:
                 - tag: enclosure_id
                   value: '{#ENCLOSURE.ID}'
+            - uuid: ff08a7ba1672490fac6ef74a35316e94
+              name: 'Storwize: Enclosure {#ENCLOSURE.ID} Temp'
+              type: DEPENDENT
+              key: 'storwize.enclosure.temp[{#ENCLOSURE.SN}]'
+              delay: '0'
+              trends: '0'
+              units: C
+              description: 'Indicates the temp in C'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.enclosure_id==''{#ENCLOSURE.ID}'')&&(@.stat_name==''temp_c''))].stat_current.first()'
+              master_item:
+                key: storwize.get.enclosurestats.raw
+              tags:
+                - tag: enclosure_id
+                  value: '{#ENCLOSURE.ID}'
           trigger_prototypes:
             - uuid: bca70d2ebb944f66a3824ecf1765a13e
-              expression: 'last(/IBM Storwize by SSH/storwize.enclosure.canisters.on[{#ENCLOSURE.SN}])<last(/IBM Storwize by SSH/storwize.enclosure.canisters[{#ENCLOSURE.SN}])'
+              expression: 'last(/IBM Spectrum Virtualize by SSH/storwize.enclosure.canisters.on[{#ENCLOSURE.SN}])<last(/IBM Spectrum Virtualize by SSH/storwize.enclosure.canisters[{#ENCLOSURE.SN}])'
               name: 'Storwize: Enclosure {#ENCLOSURE.ID} Canister is offline'
               priority: HIGH
               manual_close: 'YES'
             - uuid: f94cb50c5e384abf84a4c0bda224199e
-              expression: 'last(/IBM Storwize by SSH/storwize.enclosure.fan.on[{#ENCLOSURE.SN}])<last(/IBM Storwize by SSH/storwize.enclosure.fan[{#ENCLOSURE.SN}])'
+              expression: 'last(/IBM Spectrum Virtualize by SSH/storwize.enclosure.fan.on[{#ENCLOSURE.SN}])<last(/IBM Spectrum Virtualize by SSH/storwize.enclosure.fan[{#ENCLOSURE.SN}])'
               name: 'Storwize: Enclosure {#ENCLOSURE.ID} FAN is offline'
               priority: HIGH
               manual_close: 'YES'
             - uuid: 6a8ab43cd78d44689e88c846cc895e75
-              expression: 'last(/IBM Storwize by SSH/storwize.enclosure.psu.on[{#ENCLOSURE.SN}])<last(/IBM Storwize by SSH/storwize.enclosure.psu[{#ENCLOSURE.SN}])'
+              expression: 'last(/IBM Spectrum Virtualize by SSH/storwize.enclosure.psu.on[{#ENCLOSURE.SN}])<last(/IBM Spectrum Virtualize by SSH/storwize.enclosure.psu[{#ENCLOSURE.SN}])'
               name: 'Storwize: Enclosure {#ENCLOSURE.ID} PSU is offline'
               priority: HIGH
               manual_close: 'YES'
@@ -2289,7 +2461,7 @@ zabbix_export:
                   value: '{#ENCLOSURE.ID}'
               trigger_prototypes:
                 - uuid: f189ba1605104ba5bdacb6fdc82744d3
-                  expression: 'find(/IBM Storwize by SSH/storwize.enclosure.psu.status[{#ENCLOSURE.ID},{#PSU.ID}],,"like","online")=0'
+                  expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.enclosure.psu.status[{#ENCLOSURE.ID},{#PSU.ID}],,"like","online")=0'
                   name: 'Storwize: Enclosure {#ENCLOSURE.ID} PSU {#PSU.ID} Status is {ITEM.VALUE}'
                   manual_close: 'YES'
           master_item:
@@ -2328,7 +2500,7 @@ zabbix_export:
                   value: '{#HOST.NAME}'
               trigger_prototypes:
                 - uuid: 8ba646f71f744de5b4ef38b394fc231a
-                  expression: 'find(/IBM Storwize by SSH/storwize.host.status[{#HOST.NAME}],,"like","online")=0'
+                  expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.host.status[{#HOST.NAME}],,"like","online")=0'
                   name: 'Storwize: Host {#HOST.NAME} Status is {ITEM.VALUE}'
                   priority: HIGH
                   manual_close: 'YES'
@@ -2591,14 +2763,16 @@ zabbix_export:
                   value: '{#MDISK.NAME}'
               trigger_prototypes:
                 - uuid: c06f625ddef04cd1adf1e20a5e76234b
-                  expression: 'find(/IBM Storwize by SSH/storwize.mdisk.status[{#MDISK.NAME}],,"like","online")=0'
+                  expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.mdisk.status[{#MDISK.NAME}],,"like","online")=0'
                   name: 'Storwize: mDisk {#MDISK.NAME} Status is {ITEM.VALUE}'
                   priority: HIGH
                   manual_close: 'YES'
           trigger_prototypes:
             - uuid: c4eb46125a1947bdb4b3e3960aeca0c8
-              expression: '(last(/IBM Storwize by SSH/storwize.mdisk.physical.free.capacity[{#MDISK.NAME}])/last(/IBM Storwize by SSH/storwize.mdisk.physical.capacity[{#MDISK.NAME}])*100)<=10'
+              expression: '(last(/IBM Spectrum Virtualize by SSH/storwize.mdisk.physical.free.capacity[{#MDISK.NAME}])/last(/IBM Spectrum Virtualize by SSH/storwize.mdisk.physical.capacity[{#MDISK.NAME}])*100)<=10'
               name: 'Storwize: mDisk {#MDISK.NAME} Low Physical Free Capacity'
+              status: DISABLED
+              discover: NO_DISCOVER
               priority: HIGH
               manual_close: 'YES'
           master_item:
@@ -2614,6 +2788,490 @@ zabbix_export:
           key: storwize.node.canister.discovery
           delay: '0'
           item_prototypes:
+            - uuid: 05dba2b23c1249bcab7106441fd27cfd
+              name: 'Storwize: Node Canister {#NODE.NAME} Compression CPU'
+              type: DEPENDENT
+              key: 'storwize.node.canister.compression_cpu_pc[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: '%'
+              description: 'Displays the percentage of allocated CPU capacity that is utilized for compression.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''compression_cpu_pc''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: 63880e5e2987460ab35d18cb3f23ade4
+              name: 'Storwize: Node Canister {#NODE.NAME} CPU usage'
+              type: DEPENDENT
+              key: 'storwize.node.canister.cpu_pc[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: '%'
+              description: 'Displays the percentage of allocated CPU capacity that is utilized for compression.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''cpu_pc''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: 8fcdd8b4965546a5ae61eb9e614a93f8
+              name: 'Storwize: Node Canister {#NODE.NAME} Drive Read IO'
+              type: DEPENDENT
+              key: 'storwize.node.canister.drive_r_io[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: iops
+              description: |
+                Displays the average number of I/O operations
+                that are transferred per second for read
+                operations to drives during the sample period.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''drive_r_io''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: 035a9b167dbc491ca0ac6e83dfe4176a
+              name: 'Storwize: Node Canister {#NODE.NAME} Drive Read mb'
+              type: DEPENDENT
+              key: 'storwize.node.canister.drive_r_mb[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: mbs
+              description: |
+                Displays the average number of megabytes
+                transferred per second for read operations to
+                drives during the sample period
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''drive_r_mb''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: 6d2f09fddb6f4c06bcb08c6f7fcf04a7
+              name: 'Storwize: Node Canister {#NODE.NAME} Drive Read ms'
+              type: DEPENDENT
+              key: 'storwize.node.canister.drive_r_ms[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: ms
+              description: |
+                Displays the average amount of time in
+                milliseconds that the system takes to respond to
+                read requests to drives over the sample period.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''drive_r_ms''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: 474096733f45419c9cf665cff5370d5c
+              name: 'Storwize: Node Canister {#NODE.NAME} Drive Write IO'
+              type: DEPENDENT
+              key: 'storwize.node.canister.drive_w_io[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: iops
+              description: |
+                Displays the average number of I/O operations
+                that are transferred per second for write
+                operations to drives during the sample period.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''drive_w_io''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: 80bd94b05ba1420db8ecd493da09bddc
+              name: 'Storwize: Node Canister {#NODE.NAME} Drive Write mb'
+              type: DEPENDENT
+              key: 'storwize.node.canister.drive_w_mb[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: mbs
+              description: |
+                Displays the average number of megabytes
+                transferred per second for write operations to
+                drives during the sample period.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''drive_w_mb''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: 236f07b5609f45da810124d3919162c4
+              name: 'Storwize: Node Canister {#NODE.NAME} Drive Write ms'
+              type: DEPENDENT
+              key: 'storwize.node.canister.drive_w_ms[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: ms
+              description: |
+                Displays the average amount of time in
+                milliseconds that the system takes to respond
+                write requests to drives over the sample period.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''drive_w_ms''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: b35843952e0845b3b7b88d2777e5b7ea
+              name: 'Storwize: Node Canister {#NODE.NAME} Fibre Channel IO'
+              type: DEPENDENT
+              key: 'storwize.node.canister.fc_io[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: iops
+              description: |
+                Displays the total input/output (I/O) operations
+                that are transferred per seconds for Fibre
+                Channel traffic on the system. This value
+                includes host I/O and any bandwidth that is used
+                for communication within the system.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''fc_io''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: f847c146b673485a8462ec165d9bee0c
+              name: 'Storwize: Node Canister {#NODE.NAME} Fibre Channel traffic'
+              type: DEPENDENT
+              key: 'storwize.node.canister.fc_mb[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: mbs
+              description: 'Displays the total number of megabytes transferred per second for Fibre Channel traffic on the system. This value includes host I/O and any bandwidth that is used for communication within the system.'
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''fc_mb''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: c31a0cbf7b3845cf882b2494b27f5c6a
+              name: 'Storwize: Node Canister {#NODE.NAME} IpLink compressed traffic'
+              type: DEPENDENT
+              key: 'storwize.node.canister.iplink_comp_mb[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: mbs
+              description: |
+                Displays the average number of compressed
+                megabytes transferred per second (MBps) over the
+                IP replication link during the sample period.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''iplink_comp_mb''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: 11df8ba897c5475f9d6f784e09bcebaf
+              name: 'Storwize: Node Canister {#NODE.NAME} IpLink IO'
+              type: DEPENDENT
+              key: 'storwize.node.canister.iplink_io[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: iops
+              description: |
+                The total input/output (I/O) operations that are
+                transferred per second for IP partnership traffic
+                on the system. This value does not include
+                Internet Small Computer System Interface (iSCSI)
+                host I/O operations.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''iplink_io''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: a55663261b214e8d9e0fddb8590331f3
+              name: 'Storwize: Node Canister {#NODE.NAME} IpLink Traffic'
+              type: DEPENDENT
+              key: 'storwize.node.canister.iplink_mb[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: mbs
+              description: |
+                The total number of megabytes transferred per
+                second for Internet Protocol (IP) replication
+                traffic on the system. This value does not
+                include iSCSI host input/output (I/O) operations.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''iplink_mb''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: 4f01ae87b07147e984a31d6bf0d97c73
+              name: 'Storwize: Node Canister {#NODE.NAME} iSCSI IO'
+              type: DEPENDENT
+              key: 'storwize.node.canister.iscsi_io[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: iops
+              description: |
+                Displays the total I/O operations that are
+                transferred per second for iSCSI traffic on the
+                system.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''iscsi_io''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: 7112aa5aa8924afcb3f4a2ae737aa214
+              name: 'Storwize: Node Canister {#NODE.NAME} iSCSI traffic'
+              type: DEPENDENT
+              key: 'storwize.node.canister.iscsi_mb[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: mbs
+              description: |
+                Displays the total number of megabytes
+                transferred per second for iSCSI traffic on the
+                system.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''iscsi_mb''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: c03ee6128a4a44768b1e33a3e28b0f2c
+              name: 'Storwize: Node Canister {#NODE.NAME} mDisk Read IO'
+              type: DEPENDENT
+              key: 'storwize.node.canister.mdisk_r_io[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: iops
+              description: |
+                Displays the average number of I/O operations
+                that are transferred per second for read
+                operations to MDisks during the sample period.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''mdisk_r_io''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: dc6abc2e16b547518db2a3aeb1bb4c86
+              name: 'Storwize: Node Canister {#NODE.NAME} mDisk Read mb'
+              type: DEPENDENT
+              key: 'storwize.node.canister.mdisk_r_mb[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: mbs
+              description: |
+                Displays the average number of megabytes
+                transferred per second for read operations to
+                MDisks during the sample period.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''mdisk_r_mb''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: 00213aebddee4fa6ade6124840cf3471
+              name: 'Storwize: Node Canister {#NODE.NAME} mDisk Write IO'
+              type: DEPENDENT
+              key: 'storwize.node.canister.mdisk_w_io[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: iops
+              description: |
+                Displays the average number of I/O operations
+                that are transferred per second for write
+                operations to MDisks during the sample period.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''mdisk_w_io''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: c315a99d5f984e99bb0200d440e69f1f
+              name: 'Storwize: Node Canister {#NODE.NAME} mDisk Write mb'
+              type: DEPENDENT
+              key: 'storwize.node.canister.mdisk_w_mb[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: mbs
+              description: |
+                Displays the average number of megabytes
+                transferred per second for write operations to
+                MDisks during the sample period.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''mdisk_w_mb''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: 68de6c5ebba9454fb72c74beadda03e3
+              name: 'Storwize: Node Canister {#NODE.NAME} mDisk Write ms'
+              type: DEPENDENT
+              key: 'storwize.node.canister.mdisk_w_ms[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: ms
+              description: |
+                Displays the average amount of time in
+                milliseconds that the system takes to respond to
+                write requests to MDisks over the sample period.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''mdisk_w_ms''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: 03350d91655746be88bbd8899f6d1960
+              name: 'Storwize: Node Canister {#NODE.NAME} SAS IO'
+              type: DEPENDENT
+              key: 'storwize.node.canister.sas_io[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: iops
+              description: |
+                Displays the total I/O operations that are
+                transferred per second for SAS traffic on the
+                system. This value includes host I/O and
+                bandwidth that is used for background RAID
+                activity.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''sas_io''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: 4d5edddd9a03411387439c166def8402
+              name: 'Storwize: Node Canister {#NODE.NAME} SAS traffic'
+              type: DEPENDENT
+              key: 'storwize.node.canister.sas_mb[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: mbs
+              description: |
+                Displays the total number of megabytes
+                transferred per second for serial-attached SCSI
+                (SAS) traffic on the system. This value includes
+                host I/O and bandwidth that is used for
+                background RAID activity.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''sas_mb''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
             - uuid: e420fb011b8a492f912f33ac92735c19
               name: 'Storwize: Node Canister {#NODE.NAME} Status'
               type: DEPENDENT
@@ -2645,10 +3303,230 @@ zabbix_export:
                   value: '{#NODE.NAME}'
               trigger_prototypes:
                 - uuid: f65172071ac0447fa126ef1aa0635544
-                  expression: 'find(/IBM Storwize by SSH/storwize.node.canister.status[{#NODE.NAME}],,"like","online")=0'
+                  expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.node.canister.status[{#NODE.NAME}],,"like","online")=0'
                   name: 'Storwize: Node Canister {#NODE.NAME} Status is {ITEM.VALUE}'
                   priority: HIGH
                   manual_close: 'YES'
+            - uuid: 7391ce55ad684341a3ea68d77b8d2e36
+              name: 'Storwize: Node Canister {#NODE.NAME} Total cache'
+              type: DEPENDENT
+              key: 'storwize.node.canister.total_cache_pc[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: '%'
+              description: |
+                Displays the total percentage for both the write
+                and read cache usage for the node.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''total_cache_pc''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: accbcf8356d34b14a22a380659d59a82
+              name: 'Storwize: Node Canister {#NODE.NAME} vDisk IO'
+              type: DEPENDENT
+              key: 'storwize.node.canister.vdisk_io[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: iops
+              description: |
+                Displays the average number of I/O operations
+                that are transferred per second for read and
+                write operations to volumes during the sample
+                period.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''vdisk_io''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: af5fafb24f094f43af023295c5ff4827
+              name: 'Storwize: Node Canister {#NODE.NAME} vDisk ms'
+              type: DEPENDENT
+              key: 'storwize.node.canister.vdisk_ms[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: ms
+              description: |
+                Displays the average amount of time in
+                milliseconds that the system takes to respond to
+                read and write requests to volumes over the
+                sample period.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''vdisk_ms''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: 0c75912d49be4440b5e6486d64bad499
+              name: 'Storwize: Node Canister {#NODE.NAME} vDisk Read IO'
+              type: DEPENDENT
+              key: 'storwize.node.canister.vdisk_r_io[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: mbs
+              description: |
+                Displays the average number of I/O operations
+                that are transferred per second for read
+                operations to volumes during the sample period.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''vdisk_r_io''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: 41214eb9b09245f0976c106ba9a06102
+              name: 'Storwize: Node Canister {#NODE.NAME} vDisk Read mb'
+              type: DEPENDENT
+              key: 'storwize.node.canister.vdisk_r_mb[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: mbs
+              description: |
+                Displays the average number of megabytes
+                transferred per second for read operations to
+                volumes during the sample period.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''vdisk_r_mb''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: 31297f4ddf494a88a8dbb778d3c081b9
+              name: 'Storwize: Node Canister {#NODE.NAME} vDisk Read ms'
+              type: DEPENDENT
+              key: 'storwize.node.canister.vdisk_r_ms[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: ms
+              description: |
+                Displays the average amount of time in
+                milliseconds that the system takes to respond to
+                read requests to volumes over the sample period.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''vdisk_r_ms''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: e020316f1a2e4b25a80cc99e2513d86f
+              name: 'Storwize: Node Canister {#NODE.NAME} vDisk Write IO'
+              type: DEPENDENT
+              key: 'storwize.node.canister.vdisk_w_io[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: iops
+              description: |
+                Displays the average number of I/O operations
+                that are transferred per second for write
+                operations to volumes during the sample period.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''vdisk_w_io''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: 4eb6d710703d4b99b53d136c0d6152d9
+              name: 'Storwize: Node Canister {#NODE.NAME} vDisk Write mb'
+              type: DEPENDENT
+              key: 'storwize.node.canister.vdisk_w_mb[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: ms
+              description: |
+                Displays the average number of megabytes
+                transferred per second for read and write
+                operations to volumes during the sample period.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''vdisk_w_mb''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: a52e5cc0531c4946b766a55ea02e60c2
+              name: 'Storwize: Node Canister {#NODE.NAME} vDisk Write ms'
+              type: DEPENDENT
+              key: 'storwize.node.canister.vdisk_w_ms[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: ms
+              description: |
+                Displays the average amount of time in
+                milliseconds that the system takes to respond to
+                write requests to volumes over the sample period.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''vdisk_w_ms''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
+            - uuid: f7739aa22681440ca829faacfd2c24e9
+              name: 'Storwize: Node Canister {#NODE.NAME} Write cache'
+              type: DEPENDENT
+              key: 'storwize.node.canister.write_cache_pc[{#NODE.NAME}]'
+              delay: '0'
+              trends: '0'
+              units: '%'
+              description: |
+                Displays the percentage of the write cache usage
+                for the node.
+              preprocessing:
+                - type: JSONPATH
+                  parameters:
+                    - '$[?((@.node_name==''{#NODE.NAME}'')&&(@.stat_name==''write_cache_pc''))].stat_current.first()'
+              master_item:
+                key: storwize.get.nodecanisterstats.raw
+              tags:
+                - tag: node_id
+                  value: '{#NODE.ID}'
+                - tag: node_name
+                  value: '{#NODE.NAME}'
           master_item:
             key: storwize.get.nodecanister.raw
           lld_macro_paths:
@@ -2687,7 +3565,7 @@ zabbix_export:
                   value: '{#NODE.NAME}'
               trigger_prototypes:
                 - uuid: 2cde1e0d5cd041b4886caff735080289
-                  expression: 'find(/IBM Storwize by SSH/storwize.node.portfc.status[{#NODE.NAME},{#PORT.ID}],,"like","online")=0'
+                  expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.node.portfc.status[{#NODE.NAME},{#PORT.ID}],,"like","active")=0'
                   name: 'Storwize: Node {#NODE.NAME} Port fc {#FC.PORT.ID} Status is {ITEM.VALUE}'
                   priority: HIGH
                   manual_close: 'YES'
@@ -2755,7 +3633,7 @@ zabbix_export:
                   value: '{#NODE.NAME}'
               trigger_prototypes:
                 - uuid: b945f55c46604b8c8ef082c35ad11ecd
-                  expression: 'find(/IBM Storwize by SSH/storwize.node.portsas.status[{#NODE.NAME},{#PORT.ID}],,"like","online")=0'
+                  expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.node.portsas.status[{#NODE.NAME},{#PORT.ID}],,"like","online")=0'
                   name: 'Storwize: Node {#NODE.NAME} Port SAS {#SAS.PORT.ID} Status is {ITEM.VALUE}'
                   priority: HIGH
                   manual_close: 'YES'
@@ -2814,7 +3692,7 @@ zabbix_export:
                   value: '{#QUORUM.ID}'
               trigger_prototypes:
                 - uuid: a2b64ac4b35b4d499469ce8ec22fb308
-                  expression: 'find(/IBM Storwize by SSH/storwize.quorum.status[{#QUORUM.ID}],,"like","online")=0'
+                  expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.quorum.status[{#QUORUM.ID}],,"like","online")=0'
                   name: 'Storwize: Quorum ID: {#QUORUM.ID} Index: {#QUORUM.INDEX} Status is {ITEM.VALUE}'
                   priority: HIGH
                   manual_close: 'YES'
@@ -3064,7 +3942,7 @@ zabbix_export:
                   value: '{#VDISK.GRP}'
               trigger_prototypes:
                 - uuid: 221689fc56704dc8addd03b4fd7ab9dc
-                  expression: 'find(/IBM Storwize by SSH/storwize.vdisk.status[{#VDISK.NAME}],,"like","online")=0'
+                  expression: 'find(/IBM Spectrum Virtualize by SSH/storwize.vdisk.status[{#VDISK.NAME}],,"like","online")=0'
                   name: 'Storwize: vDisk {#VDISK.NAME} Status is {ITEM.VALUE}'
                   priority: HIGH
                   manual_close: 'YES'
@@ -3147,8 +4025,10 @@ zabbix_export:
                   value: '{#VDISK.GRP}'
           trigger_prototypes:
             - uuid: e1ef2651c25c432ba90610e69e96c949
-              expression: '((last(/IBM Storwize by SSH/storwize.vdisk.free.capacity[{#VDISK.NAME}])/last(/IBM Storwize by SSH/storwize.vdisk.capacity[{#VDISK.NAME}]))*100)<=10'
+              expression: '((last(/IBM Spectrum Virtualize by SSH/storwize.vdisk.free.capacity[{#VDISK.NAME}])/last(/IBM Spectrum Virtualize by SSH/storwize.vdisk.capacity[{#VDISK.NAME}]))*100)<=10'
               name: 'Storwize: vDisk {#VDISK.NAME} Free Capacity is low'
+              status: DISABLED
+              discover: NO_DISCOVER
               priority: HIGH
               manual_close: 'YES'
           master_item:
